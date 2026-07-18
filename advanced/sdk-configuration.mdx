@@ -1,0 +1,299 @@
+---
+title: "Configure the SDK with SdkFactory and Generate Facade"
+sidebarTitle: "SDK Configuration"
+description: "Build and configure a reusable Sdk instance with SdkFactory's fluent API, wire it into your DI container, and register it as the static Generate facade."
+---
+
+The SDK ships two complementary configuration paths: `SdkFactory`, a fluent builder that produces a fully immutable `Sdk` value object, and `Generate::configure(Sdk)`, a static facade that lets you register that instance once and call it from anywhere in your application. Most projects use both — `SdkFactory` assembles the runtime at bootstrap time, and `Generate` provides the ergonomic entry-point everywhere else.
+
+## The Sdk value object
+
+`Sdk` holds every collaborator and default the SDK needs to make HTTP calls and dispatch requests. All its fields are `readonly`, so an `Sdk` instance is safe to share across requests, threads, or container lifetimes without additional locking.
+
+| Field | Type | Purpose |
+|---|---|---|
+| `httpClient` | `ClientInterface` | PSR-18 HTTP client for all provider calls |
+| `requestFactory` | `RequestFactoryInterface` | PSR-17 factory for outbound HTTP requests |
+| `streamFactory` | `StreamFactoryInterface` | PSR-17 factory for request bodies |
+| `logger` | `?LoggerInterface` | Optional PSR-3 logger for request traces |
+| `container` | `?ContainerInterface` | Optional PSR-11 container for tool resolution |
+| `userAgent` | `string` | Sent in every request, defaults to `aisdk-php/1.0` |
+| `defaultModel` | `?Model` | Fallback model for all modalities |
+| `defaultTextModel` | `?Model` | Default for `Generate::text()` / `$sdk->text()` |
+| `defaultImageModel` | `?Model` | Default for `Generate::image()` / `$sdk->image()` |
+| `defaultSpeechModel` | `?Model` | Default for `Generate::speech()` / `$sdk->speech()` |
+| `defaultEmbeddingModel` | `?Model` | Default for `Generate::embedding()` / `$sdk->embedding()` |
+| `defaultVideoModel` | `?Model` | Default for `Generate::video()` / `$sdk->video()` |
+| `defaultTranscriptionModel` | `?Model` | Default for `Generate::transcription()` / `$sdk->transcription()` |
+
+## Building an Sdk with SdkFactory
+
+`SdkFactory` exposes a fluent builder API. Call `make()` at the end to produce the immutable `Sdk`. You do not need to supply every option — the factory auto-discovers PSR-17 factories via `php-http/discovery` and creates a sensible Guzzle client when none is provided.
+
+<Steps>
+  <Step title="Create a SdkFactory instance">
+    Instantiate `SdkFactory` — no constructor arguments are required.
+  </Step>
+  <Step title="Chain builder methods">
+    Call any combination of `with*` methods to configure the HTTP client, logger, container, timeouts, and default models.
+  </Step>
+  <Step title="Call make()">
+    `make()` assembles the immutable `Sdk`, auto-discovering any PSR-17 factories you did not supply explicitly.
+  </Step>
+  <Step title="Register with Generate (optional)">
+    Pass the built `Sdk` to `Generate::configure($sdk)` to activate the static facade throughout your application.
+  </Step>
+</Steps>
+
+```php
+use AiSdk\Support\SdkFactory;
+use AiSdk\OpenAI;
+use AiSdk\Anthropic;
+
+$sdk = (new SdkFactory())
+    ->withDefaultTextModel(OpenAI::model('gpt-4o'))
+    ->withDefaultImageModel(OpenAI::model('dall-e-3'))
+    ->make();
+```
+
+### Builder reference
+
+<AccordionGroup>
+  <Accordion title="withHttpClient(ClientInterface $client)">
+    Replaces the default Guzzle client with any PSR-18-compatible HTTP client. Useful when you need custom middleware, retries, or a mock handler in tests.
+
+    ```php
+    use GuzzleHttp\Client;
+    use GuzzleHttp\HandlerStack;
+
+    $sdk = (new SdkFactory())
+        ->withHttpClient(new Client(['handler' => HandlerStack::create()]))
+        ->make();
+    ```
+  </Accordion>
+
+  <Accordion title="withRequestFactory() / withStreamFactory()">
+    Override the PSR-17 request and stream factories. When both are omitted, the factory uses `Http\Discovery\Psr17FactoryDiscovery` to find any installed implementation.
+
+    ```php
+    use Nyholm\Psr7\Factory\Psr17Factory;
+
+    $psr17 = new Psr17Factory();
+
+    $sdk = (new SdkFactory())
+        ->withRequestFactory($psr17)
+        ->withStreamFactory($psr17)
+        ->make();
+    ```
+  </Accordion>
+
+  <Accordion title="withLogger(LoggerInterface $logger)">
+    Attach a PSR-3 logger. The SDK writes debug-level entries for every outbound request and response, making this useful during development.
+
+    ```php
+    use Monolog\Logger;
+    use Monolog\Handler\StreamHandler;
+
+    $logger = new Logger('aisdk');
+    $logger->pushHandler(new StreamHandler('php://stderr'));
+
+    $sdk = (new SdkFactory())
+        ->withLogger($logger)
+        ->make();
+    ```
+  </Accordion>
+
+  <Accordion title="withContainer(ContainerInterface $container)">
+    Registers a PSR-11 container used to resolve tool dependencies during tool execution. See the framework integration examples below.
+
+    ```php
+    $sdk = (new SdkFactory())
+        ->withContainer($container)
+        ->make();
+    ```
+  </Accordion>
+
+  <Accordion title="withUserAgent(string $userAgent)">
+    Replaces the default `aisdk-php/1.0` `User-Agent` header sent with every request.
+
+    ```php
+    $sdk = (new SdkFactory())
+        ->withUserAgent('my-app/2.0 aisdk-php/1.0')
+        ->make();
+    ```
+  </Accordion>
+
+  <Accordion title="withConnectTimeout() / withTimeout()">
+    Set the connection and total request timeouts in seconds. Both must be greater than zero. The defaults are 10 s and 120 s respectively.
+
+    ```php
+    $sdk = (new SdkFactory())
+        ->withConnectTimeout(5.0)
+        ->withTimeout(60.0)
+        ->make();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Per-modality default models
+
+`withDefaultModel()` registers a single model as the fallback for every modality it implements. If the model object implements `TextModelInterface`, it automatically becomes the default text model; if it also implements `ImageModelInterface`, it becomes the default image model too.
+
+For finer-grained control, use the modality-specific setters:
+
+<CodeGroup>
+```php Single cross-modality default
+use AiSdk\Support\SdkFactory;
+use AiSdk\OpenAI;
+
+// One model used as the fallback for all modalities it supports
+$sdk = (new SdkFactory())
+    ->withDefaultModel(OpenAI::model('gpt-4o'))
+    ->make();
+```
+
+```php Per-modality defaults
+use AiSdk\Support\SdkFactory;
+use AiSdk\OpenAI;
+use AiSdk\Anthropic;
+
+// Each modality gets its own specialist model
+$sdk = (new SdkFactory())
+    ->withDefaultTextModel(Anthropic::model('claude-opus-4-5'))
+    ->withDefaultImageModel(OpenAI::model('dall-e-3'))
+    ->withDefaultSpeechModel(OpenAI::model('tts-1'))
+    ->withDefaultTranscriptionModel(OpenAI::model('whisper-1'))
+    ->withDefaultEmbeddingModel(OpenAI::model('text-embedding-3-small'))
+    ->withDefaultVideoModel(OpenAI::model('sora-1'))
+    ->make();
+```
+</CodeGroup>
+
+<Note>
+  When you call `withDefaultModel()` with a model that implements multiple modality interfaces, the factory sets every matching per-modality field automatically. You can always override individual modalities afterward with the specific setters.
+</Note>
+
+## Registering Generate::configure()
+
+Once you have an `Sdk` instance, pass it to `Generate::configure()` to activate the static facade. Every subsequent call to `Generate::text()`, `Generate::image()`, and the other factory methods draws from this configured instance.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Support\SdkFactory;
+use AiSdk\OpenAI;
+
+$sdk = (new SdkFactory())
+    ->withDefaultTextModel(OpenAI::model('gpt-4o'))
+    ->make();
+
+Generate::configure($sdk);
+
+// All subsequent calls use gpt-4o as the text default
+$result = Generate::text('Summarise this article')->run();
+```
+
+<Warning>
+  `Generate::configure()` stores state statically. In long-running processes (Swoole, ReactPHP, RoadRunner) each worker or coroutine should configure its own `Sdk` instance and call methods on it directly rather than relying on the static facade.
+</Warning>
+
+## Using the Sdk instance directly
+
+Rather than routing through the `Generate` facade, you can call modality methods directly on an `Sdk` instance. This is preferable in DI-heavy applications because you can inject the `Sdk` as a constructor dependency.
+
+```php
+use AiSdk\Support\Sdk;
+
+class Summariser
+{
+    public function __construct(private readonly Sdk $sdk) {}
+
+    public function summarise(string $article): string
+    {
+        return $this->sdk
+            ->text("Summarise the following:\n\n{$article}")
+            ->run()
+            ->text;
+    }
+}
+```
+
+## Immutable model swapping at runtime
+
+`Sdk` exposes `with*` methods that return a new `Sdk` with the changed field while leaving the original untouched. Use these when you need to override the default model for a specific request without affecting the shared instance.
+
+```php
+use AiSdk\OpenAI;
+
+// $sdk is your application-wide shared instance
+$cheapSdk = $sdk->withDefaultTextModel(OpenAI::model('gpt-4o-mini'));
+
+$result = $cheapSdk->text('Quick question: what is 2 + 2?')->run();
+```
+
+## Framework integration
+
+<CodeGroup>
+```php Laravel (AppServiceProvider)
+use AiSdk\Generate;
+use AiSdk\Support\SdkFactory;
+use AiSdk\Support\Sdk;
+use AiSdk\OpenAI;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->singleton(Sdk::class, function ($app) {
+            return (new SdkFactory())
+                ->withDefaultTextModel(OpenAI::model('gpt-4o'))
+                ->withContainer($app)   // PSR-11 compatible
+                ->withLogger($app->make(\Psr\Log\LoggerInterface::class))
+                ->make();
+        });
+    }
+
+    public function boot(): void
+    {
+        // Also configure the static facade for convenience
+        Generate::configure($this->app->make(Sdk::class));
+    }
+}
+```
+
+```php Symfony (services.yaml)
+# config/services.yaml
+services:
+    AiSdk\Support\SdkFactory:
+        class: AiSdk\Support\SdkFactory
+
+    AiSdk\Support\Sdk:
+        factory: ['@AiSdk\Support\SdkFactory', 'make']
+        calls:
+            - [withDefaultTextModel, ['@aisdk.model.default_text']]
+            - [withLogger, ['@logger']]
+            - [withContainer, ['@service_container']]
+```
+
+```php Symfony (PHP config)
+// config/packages/aisdk.php
+use AiSdk\Support\Sdk;
+use AiSdk\Support\SdkFactory;
+use AiSdk\OpenAI;
+use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigurator;
+
+return static function (ContainerConfigurator $container): void {
+    $services = $container->services();
+
+    $services->set(Sdk::class)
+        ->factory([SdkFactory::class, 'make'])
+        ->args([
+            OpenAI::model('gpt-4o'),   // defaultTextModel
+        ]);
+};
+```
+</CodeGroup>
+
+<Tip>
+  If you register `Sdk` as a singleton in your container, inject it directly into your services. Reserve `Generate::configure()` for scripts, CLI commands, and plain PHP contexts where a DI container is not available.
+</Tip>

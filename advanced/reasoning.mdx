@@ -1,0 +1,197 @@
+---
+title: "Enable Extended Chain-of-Thought Reasoning in Requests"
+sidebarTitle: "Reasoning"
+description: "Enable extended chain-of-thought reasoning with Reasoning::effort() or Reasoning::budget(), and read the thinking text from $result->reasoning."
+---
+
+Some models can expose their internal reasoning as a separate block of text before producing a final answer. The PHP AI SDK represents this as a first-class portable concept through the `Reasoning` value object, so you can enable and tune thinking behaviour with a single API call regardless of which provider you target.
+
+## Creating a Reasoning configuration
+
+The `Reasoning` class has two factory methods: one for named effort levels and one for an explicit token budget.
+
+### Named effort levels
+
+`Reasoning::effort()` accepts one of four string constants. The SDK translates each level to a percentage of the model's maximum output token budget:
+
+| Effort level | Budget percentage |
+|---|---|
+| `minimal` | 2% of max tokens |
+| `low` | 10% of max tokens |
+| `medium` | 30% of max tokens (default for Anthropic) |
+| `high` | 60% of max tokens |
+
+```php
+use AiSdk\Reasoning;
+
+$reasoning = Reasoning::effort('low');      // 10%
+$reasoning = Reasoning::effort('medium');   // 30%
+$reasoning = Reasoning::effort('high');     // 60%
+$reasoning = Reasoning::effort('minimal'); // 2%
+```
+
+<Note>
+  Passing an unrecognised string throws `InvalidArgumentException` immediately, so typos fail fast rather than silently falling back to a default.
+</Note>
+
+### Explicit token budget
+
+`Reasoning::budget()` lets you specify an exact token ceiling. The SDK clamps the value between a provider-specific minimum (1,024 for Anthropic) and the request's `maxTokens`.
+
+```php
+use AiSdk\Reasoning;
+
+$reasoning = Reasoning::budget(4096);
+```
+
+<Warning>
+  OpenAI's Chat Completions adapter does **not** accept `Reasoning::budget()`. OpenAI only supports named effort levels through `reasoning_effort`. Passing a budget to an OpenAI model throws `InvalidArgumentException` at request build time. Use `Reasoning::effort()` for OpenAI, or inject raw budget options with `->providerOptions('openai', ['raw' => [...]])` if you need low-level control.
+</Warning>
+
+## Attaching reasoning to a request
+
+Call `->reasoning()` on a `PendingTextRequest`. You can pass a `Reasoning` object or a plain effort string — both are accepted:
+
+<CodeGroup>
+```php Object form
+use AiSdk\Generate;
+use AiSdk\Reasoning;
+
+$result = Generate::text('Prove that √2 is irrational.')
+    ->model($model)
+    ->reasoning(Reasoning::effort('high'))
+    ->maxTokens(8000)
+    ->run();
+```
+
+```php Shorthand string
+use AiSdk\Generate;
+
+$result = Generate::text('Prove that √2 is irrational.')
+    ->model($model)
+    ->reasoning('high')   // equivalent to Reasoning::effort('high')
+    ->maxTokens(8000)
+    ->run();
+```
+</CodeGroup>
+
+## Reading reasoning from the result
+
+After the request completes, `$result->reasoning` contains the full thinking text as a plain string. `$result->text` contains the final answer as usual.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Reasoning;
+
+$result = Generate::text('What is the fastest route from A to B?')
+    ->model($model)
+    ->reasoning(Reasoning::effort('medium'))
+    ->maxTokens(4096)
+    ->run();
+
+echo "Thinking:\n" . $result->reasoning . "\n\n";
+echo "Answer:\n" . $result->text . "\n";
+```
+
+`$result->reasoning` is `null` when reasoning is not enabled or when the provider did not return a thinking block.
+
+## Streaming reasoning chunks
+
+When you stream a request with reasoning enabled, the generator yields `ReasoningDeltaPart` objects interleaved with the usual `TextDeltaPart` chunks. Consume them in a `foreach` loop and differentiate by class:
+
+```php
+use AiSdk\Generate;
+use AiSdk\Reasoning;
+use AiSdk\Streaming\ReasoningDeltaPart;
+use AiSdk\Streaming\TextDeltaPart;
+
+$stream = Generate::text('Walk me through Euclid\'s proof of infinite primes.')
+    ->model($model)
+    ->reasoning(Reasoning::effort('high'))
+    ->maxTokens(6000)
+    ->stream();
+
+foreach ($stream->parts() as $part) {
+    if ($part instanceof ReasoningDeltaPart) {
+        echo '[thinking] ' . $part->text;
+    } elseif ($part instanceof TextDeltaPart) {
+        echo $part->text;
+    }
+}
+
+// Accumulated reasoning and answer are also available after draining
+$result = $stream->result();
+echo "\n\nFull reasoning: " . $result->reasoning;
+```
+
+## OpenAI example
+
+OpenAI maps named effort levels directly to the `reasoning_effort` request parameter. Temperature is automatically omitted for reasoning models (o-series and gpt-5 family).
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Reasoning;
+
+$result = Generate::text('Design an algorithm to solve the travelling salesman problem.')
+    ->model(OpenAI::model('o3'))
+    ->reasoning(Reasoning::effort('high'))
+    ->maxTokens(8000)
+    ->run();
+
+echo $result->text;
+// Inspect the chain-of-thought
+echo $result->reasoning;
+```
+
+<Note>
+  The SDK internally sends `"reasoning_effort": "high"` for OpenAI. If you target the o-series or gpt-5 models, the SDK also omits `temperature` from the request body automatically.
+</Note>
+
+## Anthropic example
+
+Anthropic translates the effort level (or explicit budget) to `thinking.budget_tokens` using `AnthropicReasoningBudget`. The minimum budget is always 1,024 tokens, and `medium` effort (30% of `maxTokens`) is the Anthropic default. The `maxTokens` you set on the request must be high enough to accommodate both the thinking block and the final response.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Anthropic;
+use AiSdk\Reasoning;
+
+$result = Generate::text('Analyse the long-term economic impact of automation.')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->reasoning(Reasoning::effort('medium'))  // 30% of maxTokens
+    ->maxTokens(16000)
+    ->run();
+
+echo $result->text;
+echo $result->reasoning; // Contents of Anthropic's <thinking> block
+```
+
+<Note>
+  Anthropic requires `maxTokens` to be at least 1,024 tokens greater than the reasoning budget so there is room for the final answer. If the calculated budget equals `maxTokens`, the SDK clamps the budget to leave space for the response.
+</Note>
+
+## Budget calculation reference
+
+The `ReasoningBudget` class performs the percentage-to-token conversion. Anthropic uses `AnthropicReasoningBudget`, a thin subclass that enforces the 1,024-token minimum. You can subclass `ReasoningBudget` for custom providers that need different curves:
+
+```php
+use AiSdk\ReasoningBudget;
+use AiSdk\Reasoning;
+
+$calculator = new ReasoningBudget();
+
+// With maxTokens = 8000 and effort 'medium' (30%)
+$budget = $calculator->calculate(
+    Reasoning::effort('medium'),
+    maxBudget: 8000,
+);
+// $budget === 2400 (8000 * 0.30)
+
+// Explicit budget is clamped to [MIN_BUDGET, maxBudget]
+$budget = $calculator->calculate(
+    Reasoning::budget(500),   // below MIN_BUDGET
+    maxBudget: 8000,
+);
+// $budget === 1024 (clamped up to MIN_BUDGET)
+```

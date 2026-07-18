@@ -1,0 +1,245 @@
+---
+title: "Real-Time Speech Translation with Live::translate() — SDK"
+sidebarTitle: "Translation"
+description: "Stream audio in one language and receive translated audio and transcript events simultaneously in real time using Live::translate()."
+---
+
+`Live::translate()` opens a streaming speech-translation session that accepts audio in a source language and simultaneously produces translated audio output along with transcript text for both sides of the translation. You stream raw audio bytes in, and the session emits `AudioDelta` events carrying synthesized speech in the target language plus `TranscriptDelta` and `TranscriptCompleted` events that carry both the original spoken text (tagged as `Input`) and the translated text (tagged as `Output`). The `to()` method is required — every other configuration option is optional.
+
+## Building a translation session
+
+`Live::translate()` returns a `PendingTranslateRequest`. Call `to()` with a BCP-47 target language tag before calling `connect()`; omitting it throws `InvalidArgumentException` when the session opens.
+
+```php
+use AiSdk\Live;
+use AiSdk\Transport;
+
+$session = Live::translate()
+    ->model(/* your model */)
+    ->from('fr')      // optional: source language hint
+    ->to('en')        // required: target language
+    ->inputAudioFormat('pcm16')
+    ->outputAudioFormat('pcm16')
+    ->connect(Transport::auto());
+```
+
+### Builder methods
+
+<Accordion title="model(Model $model)">
+Sets the Live-capable translation model. The model must implement `LiveModelInterface`.
+</Accordion>
+
+<Accordion title="from(string $language)">
+Provides a BCP-47 source language hint (for example `'fr'`, `'de'`, `'ja'`). When omitted, the model attempts automatic language detection. Providing the correct source language reduces latency and improves accuracy.
+
+```php
+Live::translate()->from('es'); // source is Spanish
+```
+</Accordion>
+
+<Accordion title="to(string $language)">
+Sets the target language as a BCP-47 tag. This option is **required**. Calling `connect()` without `to()` throws `InvalidArgumentException`.
+
+```php
+Live::translate()->to('en'); // translate into English
+```
+</Accordion>
+
+<Accordion title="inputAudioFormat(string $format)">
+Sets the encoding of the audio you send into the session. Common values include `'pcm16'` and `'g711_ulaw'`.
+
+```php
+Live::translate()->inputAudioFormat('pcm16');
+```
+</Accordion>
+
+<Accordion title="outputAudioFormat(string $format)">
+Sets the encoding of the translated audio the model synthesizes and streams back. Must match what your audio output pipeline expects.
+
+```php
+Live::translate()->outputAudioFormat('pcm16');
+```
+</Accordion>
+
+<Accordion title="connect(TransportInterface $transport)">
+Validates the request (including the required `to()` option), opens the session using the given transport, and returns a `LiveSession`.
+</Accordion>
+
+## Sending audio
+
+Stream audio chunks into the session using `sendAudio()`. The session processes audio continuously; call `commitAudio()` when you have finished a discrete utterance.
+
+```php
+$pcm = fopen('speech.pcm', 'rb');
+while (! feof($pcm)) {
+    $session->sendAudio(fread($pcm, 4096));
+}
+fclose($pcm);
+
+// Tell the model the utterance is complete
+$session->commitAudio();
+```
+
+## Events
+
+A translation session emits three event types you care about: `AudioDelta` for the translated speech, and `TranscriptDelta` / `TranscriptCompleted` for text. The `$source` property on transcript events distinguishes the original speech from the translation.
+
+```php
+use AiSdk\Live\AudioDelta;
+use AiSdk\Live\TranscriptDelta;
+use AiSdk\Live\TranscriptCompleted;
+use AiSdk\Live\TranscriptSource;
+use AiSdk\Live\LiveError;
+use AiSdk\Live\LiveClosed;
+
+foreach ($session->events() as $event) {
+    match (true) {
+        $event instanceof AudioDelta => playTranslatedAudio($event->bytes),
+
+        $event instanceof TranscriptDelta && $event->source === TranscriptSource::Input =>
+            updateOriginalCaption($event->delta),
+
+        $event instanceof TranscriptDelta && $event->source === TranscriptSource::Output =>
+            updateTranslatedCaption($event->delta),
+
+        $event instanceof TranscriptCompleted && $event->source === TranscriptSource::Input =>
+            finalizeOriginal($event->text, $event->itemId),
+
+        $event instanceof TranscriptCompleted && $event->source === TranscriptSource::Output =>
+            finalizeTranslation($event->text, $event->itemId),
+
+        $event instanceof LiveError => log('Error: ' . $event->message),
+        $event instanceof LiveClosed => null,
+        default => null,
+    };
+}
+```
+
+### Event reference
+
+<Accordion title="AudioDelta — audio.delta (source: Output)">
+Carries a chunk of synthesized audio in the target language. Buffer or stream `$event->bytes` to your audio output in real time.
+
+```php
+if ($event instanceof AudioDelta) {
+    fwrite($speaker, $event->bytes);
+}
+```
+</Accordion>
+
+<Accordion title="TranscriptDelta — transcript.delta (source: Input)">
+A partial transcript fragment of the **original** spoken audio. Concatenate these delta values to track what the speaker said in the source language.
+
+```php
+if ($event instanceof TranscriptDelta && $event->source === TranscriptSource::Input) {
+    $originalBuffer .= $event->delta;
+}
+```
+</Accordion>
+
+<Accordion title="TranscriptDelta — transcript.delta (source: Output)">
+A partial transcript fragment of the **translated** text. Concatenate these to track the translation as it builds.
+
+```php
+if ($event instanceof TranscriptDelta && $event->source === TranscriptSource::Output) {
+    $translationBuffer .= $event->delta;
+}
+```
+</Accordion>
+
+<Accordion title="TranscriptCompleted — transcript.completed (source: Input)">
+The final, committed transcript of the original utterance. Use `$event->text` as the authoritative source-language text.
+</Accordion>
+
+<Accordion title="TranscriptCompleted — transcript.completed (source: Output)">
+The final, committed translation of the utterance. Use `$event->text` as the authoritative target-language text.
+</Accordion>
+
+## Complete example
+
+```php
+use AiSdk\Live;
+use AiSdk\Live\AudioDelta;
+use AiSdk\Live\TranscriptDelta;
+use AiSdk\Live\TranscriptCompleted;
+use AiSdk\Live\TranscriptSource;
+use AiSdk\Live\LiveClosed;
+use AiSdk\Transport;
+
+$session = Live::translate()
+    ->model(/* your model */)
+    ->from('fr')
+    ->to('en')
+    ->inputAudioFormat('pcm16')
+    ->outputAudioFormat('pcm16')
+    ->connect(Transport::auto());
+
+// Stream a French audio file
+$handle = fopen('french_speech.pcm', 'rb');
+while (! feof($handle)) {
+    $session->sendAudio(fread($handle, 4096));
+}
+fclose($handle);
+$session->commitAudio();
+
+$original    = '';
+$translation = '';
+
+foreach ($session->events() as $event) {
+    if ($event instanceof AudioDelta) {
+        // Play the translated English audio
+        fwrite(STDOUT, $event->bytes);
+    }
+
+    if ($event instanceof TranscriptDelta) {
+        if ($event->source === TranscriptSource::Input) {
+            $original .= $event->delta;
+        } else {
+            $translation .= $event->delta;
+        }
+    }
+
+    if ($event instanceof TranscriptCompleted) {
+        if ($event->source === TranscriptSource::Input) {
+            echo PHP_EOL . '[Original]    ' . $event->text;
+        } else {
+            echo PHP_EOL . '[Translation] ' . $event->text;
+        }
+    }
+
+    if ($event instanceof LiveClosed) {
+        break;
+    }
+}
+
+$session->close();
+```
+
+<Note>
+Not all providers emit both `Input` and `Output` transcript events for translation sessions. Check your provider's documentation to confirm which transcript sources are available.
+</Note>
+
+## Using WebRTC for browser clients
+
+You can generate a short-lived client secret so a browser connects directly to the provider without routing audio through your server.
+
+```php
+use AiSdk\Live;
+
+$secret = Live::translate()
+    ->model(/* your model */)
+    ->from('de')
+    ->to('en')
+    ->clientSecret();
+
+return response()->json([
+    'client_secret' => $secret->value,
+    'expires_at'    => $secret->expiresAt,
+]);
+```
+
+For a full SDP exchange, use `webRtc(string $offerSdp)` to receive a `WebRtcAnswer` containing the SDP answer and an optional `callId`.
+
+<Warning>
+`to()` is required before calling `connect()`, `clientSecret()`, or `webRtc()`. Omitting it throws `InvalidArgumentException` with the message "Live::translate() requires to()."
+</Warning>

@@ -1,0 +1,249 @@
+---
+title: "Real-Time Speech Transcription with Live::transcribe()"
+sidebarTitle: "Transcription"
+description: "Stream audio into a persistent Live session and receive partial and final transcripts in real time with Live::transcribe() and TranscriptSource."
+---
+
+`Live::transcribe()` opens a streaming speech-to-text session that emits transcript text incrementally as audio arrives, rather than waiting for a full audio clip to be processed. You stream raw audio bytes into the session and consume a sequence of transcript events — deltas, in-progress updates, and finalized segments — that let you display captions or feed downstream systems with minimal latency. Unlike batch transcription with `Generate::transcription()`, a Live transcription session stays connected across multiple utterances and processes audio continuously until you close it.
+
+## Building a transcription session
+
+`Live::transcribe()` returns a `PendingTranscribeRequest` you configure with optional builder methods before calling `connect()`.
+
+```php
+use AiSdk\Live;
+use AiSdk\Transport;
+
+$session = Live::transcribe()
+    ->model(/* your model */)
+    ->language('en')
+    ->audioFormat('pcm16')
+    ->connect(Transport::auto());
+```
+
+### Builder methods
+
+<Accordion title="model(Model $model)">
+Sets the Live-capable transcription model. The model must implement `LiveModelInterface`.
+</Accordion>
+
+<Accordion title="language(string $language)">
+Provides a BCP-47 language hint (for example `'en'`, `'es'`, `'zh'`). Supplying the correct language improves accuracy and latency, especially for accented speech. Omit this option to let the model detect the language automatically.
+
+```php
+Live::transcribe()->language('fr');
+```
+</Accordion>
+
+<Accordion title="audioFormat(string $format)">
+Sets the encoding of the audio you send. Common values include `'pcm16'` and `'g711_ulaw'`. Defaults to whatever the provider accepts by default.
+
+```php
+Live::transcribe()->audioFormat('pcm16');
+```
+</Accordion>
+
+<Accordion title="connect(TransportInterface $transport)">
+Opens the session using the given transport and returns a `LiveSession`. Call this after all other configuration is complete.
+</Accordion>
+
+## Sending audio
+
+After connecting, push audio frames to the session using `sendAudio()`. You can send audio in any chunk size your capture pipeline produces; the SDK forwards each call directly to the provider.
+
+```php
+// From a file
+$handle = fopen('recording.pcm', 'rb');
+while (! feof($handle)) {
+    $session->sendAudio(fread($handle, 4096));
+}
+fclose($handle);
+
+// Signal end-of-stream when done
+$session->commitAudio();
+```
+
+<Tip>
+Call `commitAudio()` when you have finished feeding audio for a given utterance. This tells the provider to finalize any partial transcript and emit a `TranscriptCompleted` event.
+</Tip>
+
+## Transcript events
+
+Iterate `$session->events()` to receive transcript updates. Three event types carry transcript text; all three include a `$source` property of type `TranscriptSource` that tells you whether the text came from audio you sent (`Input`) or from the model's own audio output (`Output`).
+
+```php
+use AiSdk\Live\TranscriptDelta;
+use AiSdk\Live\TranscriptUpdate;
+use AiSdk\Live\TranscriptCompleted;
+use AiSdk\Live\TranscriptSource;
+use AiSdk\Live\LiveError;
+use AiSdk\Live\LiveClosed;
+
+foreach ($session->events() as $event) {
+    match (true) {
+        $event instanceof TranscriptDelta => print($event->delta),
+        $event instanceof TranscriptUpdate => showCaption($event->text, $event->itemId),
+        $event instanceof TranscriptCompleted => finalizeCaption($event->text, $event->itemId),
+        $event instanceof LiveError => log('Transcription error: ' . $event->message),
+        $event instanceof LiveClosed => null,
+        default => null,
+    };
+}
+```
+
+### Event reference
+
+<Accordion title="TranscriptDelta — transcript.delta">
+A partial transcript fragment appended to the current utterance. Concatenate `$event->delta` values to build the growing text for a given `$event->itemId`. The `$event->source` is usually `TranscriptSource::Input` for audio you sent.
+
+```php
+if ($event instanceof TranscriptDelta) {
+    echo $event->delta; // e.g. "Hello, how are"
+}
+```
+</Accordion>
+
+<Accordion title="TranscriptUpdate — transcript.update">
+A revised snapshot of the full in-progress transcript for a given `$event->itemId`. Use `$event->text` to replace your current caption buffer — this event represents the best current guess at the full utterance so far, not an incremental fragment.
+
+```php
+if ($event instanceof TranscriptUpdate) {
+    $captions[$event->itemId] = $event->text;
+}
+```
+</Accordion>
+
+<Accordion title="TranscriptCompleted — transcript.completed">
+The final, committed transcript for an utterance identified by `$event->itemId`. After this event, the `itemId` will not receive further updates. Use `$event->text` as the authoritative transcription.
+
+```php
+if ($event instanceof TranscriptCompleted) {
+    saveFinalTranscript($event->itemId, $event->text, $event->source);
+}
+```
+</Accordion>
+
+### TranscriptSource values
+
+| Value | Meaning |
+|---|---|
+| `TranscriptSource::Input` | Text transcribed from the audio you sent into the session |
+| `TranscriptSource::Output` | Text transcribed from the model's own synthesized speech (relevant in voice sessions) |
+| `TranscriptSource::Unknown` | The provider did not specify the source |
+
+## Difference from batch Generate::transcription()
+
+`Generate::transcription()` is a stateless, one-shot call: you pass a complete audio file and receive a finished transcript in a single round trip. `Live::transcribe()` keeps the connection open, allows you to stream audio in real time, and emits incremental results you can display while the speaker is still talking. Choose `Generate::transcription()` for offline processing of recorded files; use `Live::transcribe()` when latency and interactivity matter.
+
+<CodeGroup>
+```php Batch transcription (stateless)
+use AiSdk\Generate;
+
+// Entire file processed in one request — no real-time output
+$transcript = Generate::transcription()
+    ->model(/* your model */)
+    ->audio(file_get_contents('interview.mp3'), 'audio/mp3')
+    ->create();
+
+echo $transcript->text;
+```
+
+```php Live transcription (streaming)
+use AiSdk\Live;
+use AiSdk\Live\TranscriptDelta;
+use AiSdk\Live\TranscriptCompleted;
+use AiSdk\Transport;
+
+$session = Live::transcribe()
+    ->model(/* your model */)
+    ->language('en')
+    ->audioFormat('pcm16')
+    ->connect(Transport::auto());
+
+// Stream from microphone in real time
+foreach (microphoneChunks() as $chunk) {
+    $session->sendAudio($chunk);
+}
+
+$session->commitAudio();
+
+foreach ($session->events() as $event) {
+    if ($event instanceof TranscriptDelta) {
+        print($event->delta);
+    }
+    if ($event instanceof TranscriptCompleted) {
+        print(PHP_EOL . '[Final] ' . $event->text . PHP_EOL);
+    }
+}
+
+$session->close();
+```
+</CodeGroup>
+
+## Complete example
+
+```php
+use AiSdk\Live;
+use AiSdk\Live\TranscriptDelta;
+use AiSdk\Live\TranscriptUpdate;
+use AiSdk\Live\TranscriptCompleted;
+use AiSdk\Live\LiveClosed;
+use AiSdk\Transport;
+
+$session = Live::transcribe()
+    ->model(/* your model */)
+    ->language('en')
+    ->audioFormat('pcm16')
+    ->connect(Transport::auto());
+
+$pcmFile = fopen('speech.pcm', 'rb');
+while (! feof($pcmFile)) {
+    $session->sendAudio(fread($pcmFile, 4096));
+}
+fclose($pcmFile);
+$session->commitAudio();
+
+$buffer = [];
+foreach ($session->events() as $event) {
+    if ($event instanceof TranscriptDelta) {
+        $buffer[$event->itemId] = ($buffer[$event->itemId] ?? '') . $event->delta;
+        echo "\r" . $buffer[$event->itemId]; // overwrite line in terminal
+    }
+
+    if ($event instanceof TranscriptCompleted) {
+        echo PHP_EOL . '[Completed] ' . $event->text . PHP_EOL;
+        unset($buffer[$event->itemId]);
+    }
+
+    if ($event instanceof LiveClosed) {
+        break;
+    }
+}
+
+$session->close();
+```
+
+## WebRTC transcription from a browser
+
+For browser-based clients that capture microphone audio, you can use WebRTC instead of a server-side connection. Call `clientSecret()` to generate a short-lived token the browser uses to connect directly to the provider.
+
+```php
+use AiSdk\Live;
+
+$secret = Live::transcribe()
+    ->model(/* your model */)
+    ->language('en')
+    ->clientSecret();
+
+// Return the token to the browser
+return response()->json([
+    'client_secret' => $secret->value,
+    'expires_at'    => $secret->expiresAt,
+]);
+```
+
+The browser can then use the `client_secret` value with the provider's browser SDK to open an authenticated WebRTC connection without any server-side audio proxying.
+
+<Warning>
+`clientSecret()` requires a model that implements `LiveClientSecretModelInterface`. Calling it on an unsupported model throws `InvalidArgumentException`.
+</Warning>

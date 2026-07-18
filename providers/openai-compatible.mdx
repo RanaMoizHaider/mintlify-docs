@@ -1,0 +1,293 @@
+---
+title: "Using OpenAI-Compatible Providers in the PHP AI SDK"
+sidebarTitle: "OpenAI-Compatible"
+description: "Use any endpoint that speaks the OpenAI API wire format — Groq, xAI, OpenRouter, Mistral, Ollama, and more — with zero extra packages."
+---
+
+The `aisdk/openai-compatible` package is the shared wire-format layer that powers every provider in the PHP AI SDK that speaks the OpenAI API shape. You never install or import it directly — instead, provider packages like `aisdk/openai` depend on it under the hood. But understanding what it does explains exactly how to point the SDK at any third-party endpoint that implements the OpenAI Chat Completions or Responses API, including Groq, xAI Grok, OpenRouter, Mistral, and locally-running models via Ollama.
+
+## How it works
+
+When you call `OpenAI::create(['baseUrl' => 'https://api.groq.com/openai/v1'])`, the `OpenAIProvider` you get back still uses all the same `aisdk/openai-compatible` builders and parsers — the only difference is the base URL. Every request goes to Groq's endpoint but is assembled by the same `ChatRequestBuilder` that talks to `api.openai.com`. This means you get full SDK features (streaming, tool calling, structured output, and reasoning) on any compliant endpoint for free.
+
+<CardGroup cols={2}>
+  <Card title="Chat Completions API" icon="message">
+    The classic `/chat/completions` format. Supported by virtually every OpenAI-compatible provider. Used by default via `ChatRequestBuilder`.
+  </Card>
+  <Card title="Responses API" icon="bolt">
+    OpenAI's newer stateful `/responses` API shape. Used by `ResponsesRequestBuilder` for endpoints that support it. Enables richer tool flows and built-in conversation state.
+  </Card>
+</CardGroup>
+
+---
+
+## The ChatRequestProfile system
+
+Different endpoints that claim "OpenAI compatibility" have subtle wire-format differences. For example, OpenAI's own o-series reasoning models use `max_completion_tokens` instead of `max_tokens`, and they do not accept a `temperature` field. The `ChatRequestProfile` class encodes these per-model or per-provider quirks so that `ChatRequestBuilder` can produce the exact payload each endpoint expects.
+
+<Accordion title="ChatRequestProfile constructor defaults">
+
+```php
+// From aisdk/openai-compatible/src/ChatRequestProfile.php
+final readonly class ChatRequestProfile
+{
+    public function __construct(
+        public ?string $maxTokensParameter = 'max_tokens',
+        public bool $includeTemperature = true,
+        public bool $omitTemperatureWhenReasoning = false,
+        public bool $includeStreamOptions = true,
+        public bool $supportsStructuredOutput = true,
+        public ?string $reasoningEffortParameter = 'reasoning_effort',
+    ) {}
+}
+```
+
+The defaults match a generic OpenAI-compatible endpoint. Most third-party providers work correctly with no profile customization at all.
+
+</Accordion>
+
+<Accordion title="ChatRequestProfile::openAI(modelId) — for native OpenAI models">
+
+```php
+public static function openAI(string $modelId): self
+{
+    return new self(
+        maxTokensParameter: 'max_completion_tokens',
+        includeTemperature: ! self::isReasoningModel($modelId),
+        omitTemperatureWhenReasoning: true,
+    );
+}
+```
+
+`OpenAITextModel` calls `ChatRequestProfile::openAI($this->modelId)` for every request. It switches to `max_completion_tokens` and drops temperature for o-series and gpt-5-series models. You never need to configure this yourself.
+
+</Accordion>
+
+<Accordion title="ChatRequestProfile::azure() — for Azure OpenAI">
+
+```php
+public static function azure(): self
+{
+    return new self(
+        maxTokensParameter: 'max_completion_tokens',
+        omitTemperatureWhenReasoning: true,
+    );
+}
+```
+
+The Azure profile uses `max_completion_tokens` for all model IDs (Azure routes the same model ID to the correct deployment) but keeps temperature for non-reasoning requests.
+
+</Accordion>
+
+### ResponsesRequestProfile
+
+The Responses API has its own parallel profile class for `ResponsesRequestBuilder`. Its defaults use `max_output_tokens` and `reasoning.effort` (dot-path notation), and it omits sampling parameters whenever a reasoning configuration is present.
+
+---
+
+## Targeting any compatible endpoint
+
+You can reach any OpenAI-compatible service by passing a custom `baseUrl` (and the appropriate `apiKey`) to `OpenAI::create()`. You do not need a separate package for each service.
+
+<Steps>
+  <Step title="Install aisdk/openai">
+    ```bash
+    composer require aisdk/openai
+    ```
+  </Step>
+  <Step title="Call OpenAI::create() with the service's base URL">
+    ```php
+    use AiSdk\OpenAI;
+
+    OpenAI::create([
+        'apiKey'  => getenv('GROQ_API_KEY'),
+        'baseUrl' => 'https://api.groq.com/openai/v1',
+    ]);
+    ```
+  </Step>
+  <Step title="Call OpenAI::model() with the service's model ID">
+    ```php
+    $model = OpenAI::model('llama-3.3-70b-versatile');
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Examples
+
+### Groq
+
+Groq provides an OpenAI-compatible endpoint at `https://api.groq.com/openai/v1`. Groq uses standard Chat Completions parameters including `max_tokens`, so the default `ChatRequestProfile` works with no adjustments.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'  => getenv('GROQ_API_KEY'),
+    'baseUrl' => 'https://api.groq.com/openai/v1',
+]);
+
+$result = Generate::text('What is the fastest PHP runtime today?')
+    ->model(OpenAI::model('llama-3.3-70b-versatile'))
+    ->run();
+
+echo $result->text;
+```
+
+<Tip>
+  Groq supports streaming, tool calling, and structured output on most of its hosted models. All three work through the SDK with no extra configuration.
+</Tip>
+
+### OpenRouter
+
+OpenRouter aggregates hundreds of models behind a single OpenAI-compatible endpoint. Point the SDK at `https://openrouter.ai/api/v1` and use any model ID from [openrouter.ai/models](https://openrouter.ai/models).
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'  => getenv('OPENROUTER_API_KEY'),
+    'baseUrl' => 'https://openrouter.ai/api/v1',
+    'headers' => [
+        'HTTP-Referer' => 'https://yourapp.example',
+        'X-Title'      => 'My PHP App',
+    ],
+]);
+
+$result = Generate::text('Summarize the history of the Internet.')
+    ->model(OpenAI::model('anthropic/claude-opus-4'))
+    ->run();
+
+echo $result->text;
+```
+
+<Note>
+  OpenRouter recommends sending `HTTP-Referer` and `X-Title` headers for attribution. Add them via the `headers` config key so they are attached to every request automatically.
+</Note>
+
+### Ollama (local models)
+
+[Ollama](https://ollama.com) exposes a local OpenAI-compatible endpoint at `http://localhost:11434/v1`. No API key is required for local use — pass an empty string or any placeholder value.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'  => 'ollama',          // Ollama ignores the key but the SDK requires a non-empty value
+    'baseUrl' => 'http://localhost:11434/v1',
+]);
+
+$result = Generate::text('Explain lazy evaluation in functional programming.')
+    ->model(OpenAI::model('llama3.2'))
+    ->run();
+
+echo $result->text;
+```
+
+Streaming works the same way:
+
+```php
+$stream = Generate::text('Write a PHP function that reverses a string.')
+    ->model(OpenAI::model('llama3.2'))
+    ->stream();
+
+foreach ($stream as $chunk) {
+    echo $chunk->text;
+}
+```
+
+### xAI (Grok)
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'  => getenv('XAI_API_KEY'),
+    'baseUrl' => 'https://api.x.ai/v1',
+]);
+
+$result = Generate::text('What is the current state of AI safety research?')
+    ->model(OpenAI::model('grok-3'))
+    ->run();
+
+echo $result->text;
+```
+
+### Mistral
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'  => getenv('MISTRAL_API_KEY'),
+    'baseUrl' => 'https://api.mistral.ai/v1',
+]);
+
+$result = Generate::text('Translate this to French: "The weather is beautiful today."')
+    ->model(OpenAI::model('mistral-large-latest'))
+    ->run();
+
+echo $result->text;
+```
+
+---
+
+## Capability compatibility across providers
+
+Not every OpenAI-compatible endpoint supports every SDK capability. The table below summarizes typical support, but always check your provider's documentation for the exact list of supported parameters.
+
+| Capability | Most providers | Notes |
+|---|---|---|
+| Text generation | ✅ | Universal |
+| Streaming | ✅ | Universal via SSE |
+| Tool calling | ✅ Most | Some small or local models may not support it |
+| Structured output (`json_schema`) | ⚡ Varies | Requires explicit provider support; `supportsStructuredOutput: false` disables it |
+| Reasoning effort | ⚡ Varies | Only on providers/models that expose a `reasoning_effort`-style parameter |
+| Embeddings | ⚡ Varies | Endpoint must expose `/embeddings` |
+| Image generation | ❌ Rare | Few third-party providers offer it |
+| Speech / transcription | ❌ Rare | Groq offers transcription; most others do not |
+
+<Warning>
+  If you call a capability on a model or endpoint that does not support it, the provider will return an error. The SDK surfaces this as an `APIStatusException` with the provider's original error message.
+</Warning>
+
+---
+
+## Provider-specific options for compatible endpoints
+
+You can pass any extra field to a compatible endpoint by using `->providerOptions('openai', [...])`. Because all compatible providers share the same `openai` provider name (you created them with `OpenAI::create()`), use the `openai` key regardless of which service you are targeting.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+// Pointing at Groq, but providerOptions key is still 'openai'
+OpenAI::create([
+    'apiKey'  => getenv('GROQ_API_KEY'),
+    'baseUrl' => 'https://api.groq.com/openai/v1',
+]);
+
+$result = Generate::text('Tell me a joke.')
+    ->model(OpenAI::model('llama-3.3-70b-versatile'))
+    ->providerOptions('openai', [
+        'frequency_penalty' => 0.5,
+    ])
+    ->run();
+```
+
+Use the `raw` sub-key to bypass all SDK merging and write directly to the request body:
+
+```php
+$result = Generate::text('Write a limerick.')
+    ->model(OpenAI::model('llama-3.3-70b-versatile'))
+    ->providerOptions('openai', [
+        'raw' => ['response_format' => ['type' => 'text']],
+    ])
+    ->run();
+```

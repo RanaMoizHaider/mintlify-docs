@@ -1,0 +1,261 @@
+---
+title: "Transcribing Audio Files to Text with the PHP AI SDK"
+sidebarTitle: "Transcription"
+description: "Use Generate::transcription() to convert audio files, URLs, or raw bytes to text, with optional language, duration, and speaker-labelled segments."
+---
+
+`Generate::transcription()` sends audio content to a speech-to-text model and returns a `TranscriptResult` containing the full transcript text along with optional metadata like detected language, duration, and time-coded segments. You supply audio through a `Content::audio()` object, which accepts file paths, HTTP URLs, base64 strings, or raw binary data.
+
+## Basic usage
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+
+$result = Generate::transcription(
+    Content::audio('/path/to/recording.mp3')
+)->run();
+
+echo $result->output->text;
+```
+
+## Supplying audio with Content::audio()
+
+`Content::audio()` is the only way to pass audio to the transcription builder. It automatically detects the source type from the value you pass.
+
+<Steps>
+  <Step title="From a local file path">
+    Pass an absolute or relative file path. The SDK reads the file, detects its MIME type automatically, and sends the bytes to the model.
+
+    ```php
+    use AiSdk\Content;
+
+    $audio = Content::audio('/var/uploads/interview.wav');
+    ```
+
+    <Note>
+      The file must be readable by the PHP process. The SDK throws `InvalidArgumentException` if the path does not exist or cannot be read.
+    </Note>
+  </Step>
+
+  <Step title="From an HTTP or HTTPS URL">
+    Pass any URL starting with `http://` or `https://`. The SDK marks the source as a URL and lets the provider fetch it directly.
+
+    ```php
+    use AiSdk\Content;
+
+    $audio = Content::audio('https://cdn.example.com/podcasts/episode-12.mp3');
+    ```
+  </Step>
+
+  <Step title="From a base64-encoded string">
+    Pass the base64 string, the MIME type, and `InputEncoding::Base64` to tell the SDK how to interpret the data.
+
+    ```php
+    use AiSdk\Content;
+    use AiSdk\InputEncoding;
+
+    $audio = Content::audio(
+        $base64EncodedString,
+        mimeType: 'audio/mp4',
+        encoding: InputEncoding::Base64,
+    );
+    ```
+  </Step>
+
+  <Step title="From raw binary bytes">
+    Pass the binary string directly. You must also provide a MIME type because the SDK cannot detect it from raw bytes.
+
+    ```php
+    use AiSdk\Content;
+
+    $bytes = file_get_contents('/tmp/call-recording.ogg');
+    $audio = Content::audio($bytes, mimeType: 'audio/ogg');
+    ```
+  </Step>
+</Steps>
+
+## Builder methods
+
+<AccordionGroup>
+  <Accordion title="audio(Content $audio)">
+    Attaches the audio content to transcribe. The `Content` instance must be of type `TYPE_AUDIO`; passing any other type (such as `Content::file()`) throws `InvalidArgumentException`.
+
+    ```php
+    use AiSdk\Content;
+    use AiSdk\Generate;
+
+    Generate::transcription()
+        ->audio(Content::audio('https://example.com/audio.mp3'))
+        ->run();
+    ```
+
+    You can also pass the `Content` object as the first argument of `Generate::transcription()`:
+
+    ```php
+    Generate::transcription(Content::audio('/recordings/meeting.wav'))->run();
+    ```
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default transcription model for this request.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::transcription()
+        ->audio(Content::audio('/audio/speech.mp3'))
+        ->model(ProviderModel::openai('whisper-1'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific parameters the SDK does not natively model. Options are scoped by provider name.
+
+    ```php
+    Generate::transcription()
+        ->audio(Content::audio('/audio/lecture.mp3'))
+        ->providerOptions('openai', [
+            'language'    => 'fr',
+            'temperature' => 0.2,
+        ])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## The TranscriptResult object
+
+`run()` returns a `TranscriptResult` with the following fields:
+
+<ResponseField name="output" type="TranscriptData" required>
+  The full transcription wrapped in a `TranscriptData` object.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Token or audio-duration consumption reported by the provider. Contains `inputTokens` and `outputTokens` where applicable.
+</ResponseField>
+
+## The TranscriptData object
+
+`TranscriptResult::$output` is a `TranscriptData` instance:
+
+<ResponseField name="text" type="string" required>
+  The complete transcript as a single plain-text string.
+</ResponseField>
+
+<ResponseField name="language" type="string|null">
+  The BCP-47 language code the model detected or was given, for example `'en'` or `'fr-CA'`. `null` when the provider does not report it.
+</ResponseField>
+
+<ResponseField name="duration" type="float|null">
+  Total audio duration in seconds. `null` when the provider does not return duration metadata.
+</ResponseField>
+
+<ResponseField name="segments" type="TranscriptSegment[]">
+  Time-coded transcript segments. Empty when the provider does not return segment-level detail.
+</ResponseField>
+
+## Transcript segments
+
+When the provider returns segment data, each element of `$transcript->segments` is a `TranscriptSegment`:
+
+<ResponseField name="text" type="string" required>
+  The spoken text in this segment.
+</ResponseField>
+
+<ResponseField name="start" type="float">
+  Start time of the segment in seconds from the beginning of the audio. Defaults to `0.0`.
+</ResponseField>
+
+<ResponseField name="end" type="float">
+  End time of the segment in seconds. Defaults to `0.0`.
+</ResponseField>
+
+<ResponseField name="speaker" type="string|null">
+  Speaker label when diarisation is available, for example `'Speaker_1'`. `null` when not supported or not requested.
+</ResponseField>
+
+## Working with segments
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+
+$result = Generate::transcription(
+    Content::audio('/recordings/team-standup.mp3')
+)->run();
+
+$transcript = $result->output;
+
+echo "Language: " . ($transcript->language ?? 'unknown') . "\n";
+echo "Duration: " . ($transcript->duration ?? 'n/a') . " seconds\n";
+echo "Full text:\n{$transcript->text}\n\n";
+
+if ($transcript->segments !== []) {
+    echo "Segments:\n";
+    foreach ($transcript->segments as $segment) {
+        $start   = number_format($segment->start, 2);
+        $end     = number_format($segment->end, 2);
+        $speaker = $segment->speaker ? "[{$segment->speaker}] " : '';
+        echo "  [{$start}s → {$end}s] {$speaker}{$segment->text}\n";
+    }
+}
+```
+
+## Transcribing from a URL
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+
+$result = Generate::transcription(
+    Content::audio('https://cdn.example.com/uploads/voicemail-2024-01.mp3')
+)->run();
+
+echo $result->output->text;
+```
+
+## Transcribing with a language hint
+
+Providing an explicit language code can improve accuracy and reduce model latency on ambiguous audio:
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+
+$result = Generate::transcription(
+    Content::audio('/audio/paris-interview.mp3')
+)
+    ->providerOptions('openai', ['language' => 'fr'])
+    ->run();
+
+echo $result->output->text;
+```
+
+## Transcribing uploaded files in a web application
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+
+// $uploadedFile is a PSR-7 UploadedFileInterface or similar
+$stream   = $uploadedFile->getStream();
+$bytes    = (string) $stream;
+$mimeType = $uploadedFile->getClientMediaType() ?? 'audio/mpeg';
+
+$result = Generate::transcription(
+    Content::audio($bytes, mimeType: $mimeType)
+)->run();
+
+return ['transcript' => $result->output->text];
+```
+
+<Warning>
+  Always validate uploaded audio files before transcribing them. Restrict accepted MIME types and file sizes in your application layer before passing content to the SDK.
+</Warning>
+
+<Tip>
+  Most providers process audio up to a maximum file size or duration limit. If you need to transcribe long recordings, split the audio into chunks of five to ten minutes and concatenate the resulting transcripts.
+</Tip>

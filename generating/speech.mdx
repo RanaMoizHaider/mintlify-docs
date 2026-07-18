@@ -1,0 +1,237 @@
+---
+title: "Converting Text to Spoken Audio with the PHP AI SDK"
+sidebarTitle: "Speech"
+description: "Use Generate::speech() to convert text to audio, choose a voice and output format, then encode or save the resulting AudioData object to disk."
+---
+
+`Generate::speech()` converts a text string into spoken audio using any provider that implements `SpeechModelInterface`. You chain the builder methods to select a voice and output format, call `run()`, and receive an `AudioResult` containing an `AudioData` object you can encode, embed in a data URI, or write to a file.
+
+## Basic usage
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::speech('Welcome to the PHP AI SDK documentation.')
+    ->voice('alloy')
+    ->format('mp3')
+    ->run();
+
+// Save directly to disk
+$result->output->save('/var/www/public/audio/welcome.mp3');
+```
+
+## Builder methods
+
+<AccordionGroup>
+  <Accordion title="input(string $input)">
+    Sets the text you want to convert to speech. This is the only required field; `run()` throws `InvalidArgumentException` when the input is empty or whitespace. You can also pass the input as the first argument to `Generate::speech()`.
+
+    ```php
+    Generate::speech()
+        ->input('Hello, this is a test of text-to-speech synthesis.')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="voice(string $voice)">
+    Selects the voice persona the model uses. The accepted values depend on your provider; the table below lists the voices available through OpenAI's TTS models.
+
+    ```php
+    Generate::speech('The quick brown fox jumps over the lazy dog.')
+        ->voice('nova')
+        ->run();
+    ```
+
+    **OpenAI built-in voices:**
+
+    | Voice | Character |
+    |---|---|
+    | `alloy` | Neutral and balanced |
+    | `ash` | Warm and approachable |
+    | `ballad` | Expressive and melodic |
+    | `coral` | Bright and conversational |
+    | `echo` | Smooth and professional |
+    | `fable` | Storytelling, expressive |
+    | `nova` | Energetic and friendly |
+    | `onyx` | Deep and authoritative |
+    | `sage` | Calm and measured |
+    | `shimmer` | Soft and gentle |
+
+    <Note>
+      Voice availability differs between models. Check your provider's documentation for the exact set supported by each TTS model.
+    </Note>
+  </Accordion>
+
+  <Accordion title="format(string $format)">
+    Sets the audio container and codec for the response. The SDK validates the value and throws `InvalidArgumentException` for unsupported formats.
+
+    ```php
+    Generate::speech('Podcast introduction text here.')
+        ->format('wav')
+        ->run();
+    ```
+
+    **Supported formats:**
+
+    | Format | MIME type | Notes |
+    |---|---|---|
+    | `mp3` | `audio/mpeg` | Default for most providers; good compression |
+    | `opus` | `audio/ogg; codecs=opus` | Low latency, excellent for streaming |
+    | `aac` | `audio/aac` | Good for Apple ecosystem |
+    | `flac` | `audio/flac` | Lossless, larger files |
+    | `wav` | `audio/wav` | Uncompressed PCM, widest compatibility |
+    | `pcm` | `audio/pcm` | Raw PCM samples, no container overhead |
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default model for this request. Call `Generate::model()` at application boot to set a global default instead of repeating this per request.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::speech('Good morning.')
+        ->model(ProviderModel::openai('tts-1-hd'))
+        ->voice('onyx')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific parameters not natively modelled by the SDK. Options are namespaced by provider name.
+
+    ```php
+    Generate::speech('Special announcement.')
+        ->providerOptions('openai', ['speed' => 1.25])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## The AudioResult object
+
+`run()` returns an `AudioResult` with these read-only fields:
+
+<ResponseField name="output" type="AudioData" required>
+  The generated audio wrapped in an `AudioData` object.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Token or character consumption reported by the provider. Contains `inputTokens` and `outputTokens` where applicable.
+</ResponseField>
+
+## The AudioData object
+
+`AudioResult::$output` is an `AudioData` instance:
+
+<ResponseField name="data" type="string">
+  The raw binary audio bytes as a PHP string. This is what you write to disk or stream over HTTP.
+</ResponseField>
+
+<ResponseField name="mimeType" type="string">
+  The MIME type matching the format you requested, for example `'audio/mpeg'` for `mp3`. Defaults to `'audio/mpeg'`.
+</ResponseField>
+
+<ResponseField name="duration" type="float|null">
+  The audio duration in seconds when the provider includes it. `null` otherwise.
+</ResponseField>
+
+### AudioData methods
+
+<ParamField body="base64()" type="string">
+  Returns the audio bytes base64-encoded as a plain string. Useful when embedding audio in JSON payloads or HTML attributes.
+</ParamField>
+
+<ParamField body="dataUri()" type="string">
+  Returns a `data:` URI combining the MIME type and base64 content, for example `data:audio/mpeg;base64,…`. Embed directly in an HTML `<audio src="…">` tag.
+</ParamField>
+
+<ParamField body="save(string $path)" type="string">
+  Writes the raw binary bytes to `$path` and returns `$path` on success. Throws `AiSdkException` if the file cannot be written.
+</ParamField>
+
+## Saving audio to disk
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::speech('Your order has been confirmed. Thank you for shopping with us.')
+    ->voice('coral')
+    ->format('mp3')
+    ->run();
+
+$audio = $result->output;
+
+// Save as an MP3 file
+$path = $audio->save('/var/www/public/audio/order-confirmed.mp3');
+echo "Audio saved to {$path}\n";
+
+if ($audio->duration !== null) {
+    echo "Duration: {$audio->duration} seconds\n";
+}
+```
+
+## Embedding audio in an HTML response
+
+Use `dataUri()` when you want to serve audio inline without an additional HTTP request:
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::speech('Click the button below to continue.')
+    ->voice('shimmer')
+    ->format('wav')
+    ->run();
+
+$src = $result->output->dataUri();
+
+echo "<audio controls src=\"{$src}\"></audio>";
+```
+
+## Streaming audio over HTTP
+
+Serve audio directly from a controller action by writing the raw bytes to the response:
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::speech($request->input('text'))
+    ->voice('echo')
+    ->format('opus')
+    ->run();
+
+$audio = $result->output;
+
+return response($audio->data)
+    ->header('Content-Type', $audio->mimeType)
+    ->header('Content-Length', strlen($audio->data));
+```
+
+<Tip>
+  The `opus` format offers the best balance of audio quality and file size for real-time streaming use cases. Use `mp3` for maximum playback compatibility across browsers and devices.
+</Tip>
+
+## Building a batch narration pipeline
+
+Generate audio for multiple text segments and concatenate them yourself, or store each clip individually:
+
+```php
+use AiSdk\Generate;
+
+$segments = [
+    'Introduction: Welcome to our quarterly report.',
+    'Revenue grew by twelve percent year over year.',
+    'Thank you for listening.',
+];
+
+$files = [];
+foreach ($segments as $i => $text) {
+    $result = Generate::speech($text)
+        ->voice('alloy')
+        ->format('mp3')
+        ->run();
+
+    $files[] = $result->output->save("/tmp/segment-{$i}.mp3");
+}
+
+echo "Created " . count($files) . " audio segments.\n";
+```

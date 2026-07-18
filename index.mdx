@@ -1,20 +1,78 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "PHP AI SDK: Unified AI for PHP 8.3+"
+sidebarTitle: "Home"
+description: "The PHP AI SDK gives you a single fluent API to generate text, images, speech, embeddings, and more — across OpenAI, Anthropic, and any OpenAI-compatible provider."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+The PHP AI SDK is a framework-agnostic library that brings the full breadth of modern AI capabilities to PHP 8.3+ applications. Whether you're building a chatbot, generating images, running voice sessions in real time, or extracting structured data from documents, the SDK provides one consistent interface that works across providers.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Make your first AI call in under five minutes
+  </Card>
+  <Card title="Installation" icon="box" href="/installation">
+    Install via Composer and configure your API keys
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/providers">
+    Understand providers, models, messages, and streaming
+  </Card>
+  <Card title="Providers" icon="plug" href="/providers/openai">
+    OpenAI, Anthropic, and OpenAI-compatible endpoints
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What you can build
+
+<CardGroup cols={3}>
+  <Card title="Text Generation" icon="message" href="/generating/text">
+    Chat, Q&A, summarization, and agentic tool-calling loops
+  </Card>
+  <Card title="Image Generation" icon="image" href="/generating/images">
+    Create and save images from natural language prompts
+  </Card>
+  <Card title="Speech & Audio" icon="microphone" href="/generating/speech">
+    Text-to-speech synthesis and audio transcription
+  </Card>
+  <Card title="Embeddings" icon="vector-square" href="/generating/embeddings">
+    Semantic search and similarity with vector embeddings
+  </Card>
+  <Card title="Video Generation" icon="film" href="/generating/video">
+    Generate videos with synchronous and async job polling
+  </Card>
+  <Card title="Real-Time Live" icon="tower-broadcast" href="/live/overview">
+    Voice, transcription, and translation over WebSocket
+  </Card>
+</CardGroup>
+
+## Get started in minutes
+
+<Steps>
+  <Step title="Install the core package">
+    ```bash
+    composer require aisdk/core aisdk/openai
+    ```
+  </Step>
+  <Step title="Set your API key">
+    ```bash
+    export OPENAI_API_KEY=sk-...
+    ```
+  </Step>
+  <Step title="Generate your first response">
+    ```php
+    use AiSdk\Generate;
+    use AiSdk\OpenAI;
+
+    OpenAI::create();
+
+    $result = Generate::text('Explain what a closure is in PHP.')
+        ->model(OpenAI::model('gpt-4o-mini'))
+        ->run();
+
+    echo $result->text;
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The PHP AI SDK requires PHP 8.3 or higher. It is fully framework-agnostic and works in Laravel, Symfony, or plain PHP scripts.
+</Note>

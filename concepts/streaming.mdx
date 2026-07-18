@@ -1,0 +1,204 @@
+---
+title: "Streaming: Real-Time Token-by-Token Text Generation"
+sidebarTitle: "Streaming"
+description: "Learn how to stream responses token-by-token using the Stream object, iterate typed parts, attach event hooks, and forward output to browsers via SSE."
+---
+
+Streaming lets you display text to users as the model generates it, rather than waiting for the entire response. The PHP AI SDK wraps the raw provider stream in a `Stream` object that accumulates state, fires typed events, and provides clean access to the finished result once the stream is exhausted.
+
+## Starting a stream
+
+Call `->stream()` instead of `->run()` on any `PendingTextRequest`. The method returns a `Stream` object immediately — no tokens have been requested yet at that point.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$stream = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('Write a short poem about PHP.')
+    ->stream();
+```
+
+## Iterating stream parts
+
+The most explicit way to consume a stream is by iterating `->parts()`. Each part is a typed `StreamPart` subclass that you can match against with `instanceof` checks.
+
+```php
+use AiSdk\Streaming\TextDeltaPart;
+use AiSdk\Streaming\ReasoningDeltaPart;
+use AiSdk\Streaming\ToolCallStartPart;
+use AiSdk\Streaming\ToolCallDeltaPart;
+use AiSdk\Streaming\FinishPart;
+
+foreach ($stream->parts() as $part) {
+    if ($part instanceof TextDeltaPart) {
+        // A fragment of the generated text.
+        echo $part->text;
+    }
+
+    if ($part instanceof ReasoningDeltaPart) {
+        // A fragment of the model's chain-of-thought (o3, claude thinking, etc.).
+        error_log('[thinking] ' . $part->text);
+    }
+
+    if ($part instanceof ToolCallStartPart) {
+        // The model is starting a tool call — name and ID are available immediately.
+        echo "Calling tool: {$part->name} (id: {$part->id})\n";
+    }
+
+    if ($part instanceof ToolCallDeltaPart) {
+        // A fragment of the tool call's argument JSON, keyed by slot $part->index.
+        // The SDK accumulates fragments; you rarely need to handle these directly.
+    }
+
+    if ($part instanceof FinishPart) {
+        // The stream is done. Contains the finish reason and token usage.
+        echo "\nFinish reason: {$part->reason->name}";
+        echo "\nTotal tokens: {$part->usage->totalTokens}";
+    }
+}
+```
+
+### Stream part reference
+
+<ResponseField name="TextDeltaPart" type="StreamPart">
+  A fragment of the assistant's text response. `$part->text` is the incremental string.
+</ResponseField>
+
+<ResponseField name="ReasoningDeltaPart" type="StreamPart">
+  A fragment of chain-of-thought output. Only emitted by models that expose their reasoning (OpenAI o-series, Anthropic extended thinking). `$part->text` is the incremental reasoning string.
+</ResponseField>
+
+<ResponseField name="ToolCallStartPart" type="StreamPart">
+  Emitted once when the model begins generating a tool call. Carries `$part->index` (slot), `$part->id` (call ID), and `$part->name` (tool name).
+</ResponseField>
+
+<ResponseField name="ToolCallDeltaPart" type="StreamPart">
+  A fragment of argument JSON for an in-progress tool call. `$part->index` links it to the corresponding `ToolCallStartPart`. The SDK assembles complete calls internally.
+</ResponseField>
+
+<ResponseField name="FinishPart" type="StreamPart">
+  Emitted once when generation ends. Contains `$part->reason` (`FinishReason` enum) and `$part->usage` (token counts).
+</ResponseField>
+
+## Text-only streaming with chunks()
+
+If you only need the text delta and want to ignore reasoning and tool-call parts, use `->chunks()`. It yields only the text strings from `TextDeltaPart` items.
+
+```php
+foreach ($stream->chunks() as $chunk) {
+    echo $chunk;
+    ob_flush();
+    flush();
+}
+```
+
+## Event hooks
+
+You can attach callbacks to a `Stream` for a more reactive programming style. Hooks fire as the underlying generator is consumed — you still need to drive the generator by calling `->run()`, `->parts()`, or `->chunks()`.
+
+```php
+use AiSdk\Results\TextResult;
+use AiSdk\ToolCall;
+
+$stream
+    ->onChunk(function (string $text): void {
+        // Fires for every TextDeltaPart.
+        echo $text;
+        ob_flush();
+        flush();
+    })
+    ->onToolCall(function (ToolCall $call): void {
+        // Fires once per completed tool call, after the stream finishes.
+        echo "\nTool called: {$call->name}\n";
+    })
+    ->onFinish(function (TextResult $result): void {
+        // Fires once after all parts have been consumed.
+        error_log("Used {$result->usage->totalTokens} tokens.");
+    })
+    ->onError(function (\Throwable $e): void {
+        // Fires on any error, suppressing the re-throw.
+        error_log("Stream error: {$e->getMessage()}");
+    });
+
+// Drive the stream.
+$stream->run();
+```
+
+<Note>
+  `onToolCall` fires **after** the stream completes, not mid-stream. Tool call argument JSON accumulates internally and is assembled into complete `ToolCall` objects only when `FinishPart` is reached.
+</Note>
+
+## Getting the final TextResult
+
+After you exhaust a stream, call `->result()` to retrieve a `TextResult` with the fully accumulated text, reasoning, tool calls, finish reason, and usage. Alternatively, call `->run()` to drain the stream and return the result in one step.
+
+```php
+// Option A: drain and get result in one call.
+$result = $stream->run();
+echo $result->text;
+echo $result->reasoning ?? ''; // Chain-of-thought, if available.
+
+// Option B: iterate manually, then inspect.
+foreach ($stream->parts() as $_) {}
+$result = $stream->result();
+```
+
+## Server-Sent Events (SSE) to a browser
+
+The following pattern sends tokens to the browser in real time using standard HTTP SSE. Set the appropriate headers before you begin iterating.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+// Disable output buffering and set SSE headers.
+while (ob_get_level()) { ob_end_clean(); }
+
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('X-Accel-Buffering: no'); // Disable Nginx buffering.
+
+$stream = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt($_GET['prompt'] ?? 'Hello!')
+    ->stream();
+
+foreach ($stream->chunks() as $chunk) {
+    // SSE format: "data: <payload>\n\n"
+    $payload = json_encode(['text' => $chunk]);
+    echo "data: {$payload}\n\n";
+    ob_flush();
+    flush();
+}
+
+// Signal the client that the stream is complete.
+$result  = $stream->result();
+$summary = json_encode([
+    'done'   => true,
+    'tokens' => $result->usage->totalTokens,
+]);
+echo "data: {$summary}\n\n";
+flush();
+```
+
+<Warning>
+  PHP's default output buffering will swallow your streamed output. Make sure you call `ob_end_clean()` (or configure `output_buffering = Off` in php.ini) before streaming begins.
+</Warning>
+
+## Re-reading a completed stream
+
+Once a `Stream` has been fully consumed, iterating `->parts()` again yields the cached history rather than re-requesting from the provider. This is safe and efficient — you pay only one API call regardless of how many times you iterate afterward.
+
+```php
+$stream->run(); // Consumes the live generator.
+
+// Safe to iterate again — returns cached parts.
+foreach ($stream->parts() as $part) { /* … */ }
+$result = $stream->result(); // Also safe.
+```

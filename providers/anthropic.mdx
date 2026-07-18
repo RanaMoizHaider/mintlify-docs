@@ -1,0 +1,373 @@
+---
+title: "Anthropic Provider for the PHP AI SDK (aisdk/anthropic)"
+sidebarTitle: "Anthropic"
+description: "Configure and use the aisdk/anthropic package to call Claude models for text generation, vision, native reasoning, and document input."
+---
+
+The `aisdk/anthropic` package is the official Anthropic provider for the PHP AI SDK. It gives you access to every Claude model through the same fluent interface you use with every other provider — the only thing that changes is the model ID and the configuration keys. Install it with Composer, export your API key, and you are ready to generate text, analyze images, process documents, and run extended thinking chains.
+
+## Installation
+
+<Steps>
+  <Step title="Require the package">
+    ```bash
+    composer require aisdk/anthropic
+    ```
+
+    `aisdk/anthropic` depends on `aisdk/core` only. It does **not** pull in `aisdk/openai-compatible` because Anthropic's wire format is distinct from the OpenAI Chat Completions shape.
+  </Step>
+  <Step title="Set your API key">
+    The provider reads `ANTHROPIC_API_KEY` from the environment. Export it before running your application or add it to your `.env` file.
+
+    ```bash
+    export ANTHROPIC_API_KEY=sk-ant-...
+    ```
+  </Step>
+  <Step title="Create the provider">
+    Call `Anthropic::create()` once at boot time. Every subsequent call to `Anthropic::model()` uses the registered provider.
+
+    ```php
+    use AiSdk\Anthropic;
+
+    Anthropic::create();
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Configuration
+
+`Anthropic::create()` accepts an optional associative array. Omitted keys fall back to their environment variable, and missing environment variables fall back to the built-in default.
+
+```php
+use AiSdk\Anthropic;
+
+Anthropic::create([
+    'apiKey'  => 'sk-ant-...',                      // env: ANTHROPIC_API_KEY (required)
+    'baseUrl' => 'https://api.anthropic.com/v1',    // env: ANTHROPIC_BASE_URL
+    'version' => '2023-06-01',                      // env: ANTHROPIC_VERSION
+    'headers' => ['anthropic-beta' => 'feature-x'], // merged into every request
+]);
+```
+
+<CardGroup cols={2}>
+  <Card title="apiKey" icon="key">
+    Your Anthropic secret key. Read from `ANTHROPIC_API_KEY` when not supplied. Sent as `x-api-key: <key>` on every request.
+  </Card>
+  <Card title="baseUrl" icon="link">
+    Base URL for all API calls. Defaults to `https://api.anthropic.com/v1`. Override to point at a proxy or a private endpoint.
+  </Card>
+  <Card title="version" icon="tag">
+    Anthropic API version string. Defaults to `2023-06-01`, which is sent as the `anthropic-version` header on every request. Read from `ANTHROPIC_VERSION`.
+  </Card>
+  <Card title="headers" icon="code">
+    An associative array of extra HTTP headers merged into every request. Use this to opt into Anthropic beta features such as extended thinking or interleaved thinking.
+  </Card>
+</CardGroup>
+
+### Enabling beta features via headers
+
+Anthropic gates new capabilities behind `anthropic-beta` headers. Pass them in the `headers` config key so they are attached to every request made by this provider instance.
+
+```php
+use AiSdk\Anthropic;
+
+// Enable the extended-thinking beta for all requests on this provider instance.
+Anthropic::create([
+    'headers' => [
+        'anthropic-beta' => 'extended-thinking-2025-05-14',
+    ],
+]);
+```
+
+<Tip>
+  If you need different beta flags for different parts of your application, call `Anthropic::create([...])` again to register a new provider instance, then obtain models from it directly: `$provider->model('claude-opus-4-5')`.
+</Tip>
+
+---
+
+## Obtaining a model
+
+Call `Anthropic::model()` with any Claude model ID. The returned `Model` object is passed directly to any `Generate::*()` fluent builder.
+
+```php
+use AiSdk\Anthropic;
+
+$model = Anthropic::model('claude-opus-4-5');
+```
+
+---
+
+## Supported capabilities
+
+The table below lists every SDK capability and its status for the Anthropic provider.
+
+| Capability | Status | Notes |
+|---|---|---|
+| Text generation | ✅ Supported | All Claude models |
+| Streaming | ✅ Supported | All Claude models |
+| Tool calling | ✅ Supported | All Claude models |
+| Reasoning (thinking blocks) | ✅ Supported | Requires `thinking`-capable Claude model |
+| Image input (vision) | ✅ Supported | JPEG, PNG, GIF, WebP |
+| File input (documents) | ✅ Supported | PDF and plain-text documents |
+| Structured output | ⚡ Adapted | Forced tool-use with schema validation — see below |
+| Embeddings | ❌ Not supported | Use a different provider |
+| Image generation | ❌ Not supported | Use a different provider |
+| Speech (TTS) | ❌ Not supported | Use a different provider |
+| Transcription (STT) | ❌ Not supported | Use a different provider |
+| Video generation / input | ❌ Not supported | — |
+| Live / Realtime | ❌ Not supported | — |
+
+<Warning>
+  Anthropic does not offer embeddings, image generation, speech synthesis, or transcription endpoints. If your application needs any of these capabilities, use the [OpenAI provider](/providers/openai) or an [OpenAI-compatible endpoint](/providers/openai-compatible) alongside Anthropic.
+</Warning>
+
+---
+
+## Text generation
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+
+Anthropic::create();
+
+$result = Generate::text('Explain monads in plain English.')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->run();
+
+echo $result->text;
+```
+
+### Streaming
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+
+Anthropic::create();
+
+$stream = Generate::text('Write a short story about a PHP developer.')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->stream();
+
+foreach ($stream as $chunk) {
+    echo $chunk->text;
+}
+```
+
+### System prompt
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+use AiSdk\Message;
+
+Anthropic::create();
+
+$result = Generate::text()
+    ->model(Anthropic::model('claude-haiku-4-5'))
+    ->system('You are a concise technical writer. Answer in bullet points only.')
+    ->withUserMessage('What are the key differences between TCP and UDP?')
+    ->run();
+```
+
+---
+
+## Image input (vision)
+
+Pass an image as message content using `Content::image()`. Claude supports JPEG, PNG, GIF, and WebP.
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Content;
+use AiSdk\ContentSource;
+use AiSdk\Generate;
+use AiSdk\Message;
+
+Anthropic::create();
+
+$result = Generate::text()
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->withMessage(Message::user([
+        Content::image(ContentSource::base64(
+            base64_encode(file_get_contents('/path/to/chart.png')),
+            'image/png',
+        )),
+        Content::text('Describe what this chart shows.'),
+    ]))
+    ->run();
+
+echo $result->text;
+```
+
+---
+
+## File input (documents)
+
+Anthropic accepts PDFs and plain-text documents as content parts. Pass them with `Content::file()`.
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Content;
+use AiSdk\ContentSource;
+use AiSdk\Generate;
+use AiSdk\Message;
+
+Anthropic::create();
+
+$result = Generate::text()
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->withMessage(Message::user([
+        Content::file(ContentSource::base64(
+            base64_encode(file_get_contents('/path/to/report.pdf')),
+            'application/pdf',
+        )),
+        Content::text('Summarize the executive summary section.'),
+    ]))
+    ->run();
+```
+
+---
+
+## Structured output
+
+Anthropic does not support native JSON Schema output mode. The SDK adapts structured output by injecting a hidden `structured_output` tool whose schema matches yours and forcing the model to call it. The result is decoded and validated before being returned in `$result->structured`.
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+use AiSdk\Outputs\Output;
+use AiSdk\Schema;
+
+Anthropic::create();
+
+$result = Generate::text('Extract company name and founding year from: "Anthropic was founded in 2021."')
+    ->model(Anthropic::model('claude-haiku-4-5'))
+    ->output(Output::schema(Schema::object([
+        'company'       => Schema::string(),
+        'founding_year' => Schema::integer(),
+    ])))
+    ->run();
+
+// $result->structured['company']       === 'Anthropic'
+// $result->structured['founding_year'] === 2021
+```
+
+<Note>
+  Because structured output is implemented via forced tool use, the model's token consumption is slightly higher than a native JSON mode would produce. For latency-sensitive workloads, keep your schema lean.
+</Note>
+
+---
+
+## Reasoning (extended thinking)
+
+Anthropic's extended thinking feature lets Claude reason step-by-step before composing its final answer. You enable it by passing a `Reasoning` configuration to your request. The SDK automatically calculates a `budget_tokens` value and adds `"thinking": {"type": "enabled", "budget_tokens": N}` to the API request body.
+
+### Minimum token budget
+
+Anthropic requires a **minimum of 1,024 thinking tokens** per request. The SDK enforces this floor automatically. If you request a budget below 1,024 the SDK clamps it up to 1,024.
+
+### Default budget percentage
+
+When you use effort levels (`Reasoning::effort()`), the SDK maps them to percentages of `maxTokens`. The default percentage for the Anthropic provider is **30 %**. The full mapping is:
+
+| Effort level | Token budget |
+|---|---|
+| `minimal` | 2% of maxTokens |
+| `low` | 10% of maxTokens |
+| `medium` | 30% of maxTokens (default) |
+| `high` | 60% of maxTokens |
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+use AiSdk\Reasoning;
+
+Anthropic::create([
+    'headers' => ['anthropic-beta' => 'extended-thinking-2025-05-14'],
+]);
+
+// Use a portable effort level — the SDK calculates the token budget for you.
+$result = Generate::text('Solve this step by step: what is 17 × 24?')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->maxTokens(8000)
+    ->reasoning(Reasoning::effort('high'))
+    ->run();
+
+echo $result->text;
+```
+
+You can also pass an explicit token budget instead of an effort level:
+
+```php
+use AiSdk\Reasoning;
+
+$result = Generate::text('Prove that the square root of 2 is irrational.')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->maxTokens(16000)
+    ->reasoning(Reasoning::budget(4096))
+    ->run();
+```
+
+<Warning>
+  Extended thinking requires a `thinking`-capable Claude model. Always opt in to the relevant beta header when calling models that support this feature, otherwise the API returns a validation error.
+</Warning>
+
+---
+
+## Tool calling
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+use AiSdk\Tool;
+use AiSdk\Schema;
+
+Anthropic::create();
+
+$getWeather = Tool::make(
+    name: 'get_weather',
+    description: 'Returns current temperature for a city.',
+    schema: Schema::object(['city' => Schema::string()->required()]),
+    handler: fn(array $args) => ['temperature' => 22, 'unit' => 'celsius'],
+);
+
+$result = Generate::text('What is the weather in Paris?')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->withTool($getWeather)
+    ->run();
+
+echo $result->text;
+```
+
+---
+
+## Provider-specific options
+
+Use `->providerOptions('anthropic', [...])` to send any Anthropic API field the SDK does not expose natively. The `raw` sub-key is applied last and can override any built-in field.
+
+```php
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+
+Anthropic::create();
+
+$result = Generate::text('Write a short poem.')
+    ->model(Anthropic::model('claude-haiku-4-5'))
+    ->providerOptions('anthropic', [
+        'top_k' => 40,
+    ])
+    ->run();
+```
+
+```php
+// Use 'raw' to set any field directly on the request body.
+$result = Generate::text('Classify the sentiment of: "I love PHP!"')
+    ->model(Anthropic::model('claude-haiku-4-5'))
+    ->providerOptions('anthropic', [
+        'raw' => ['metadata' => ['user_id' => 'user_42']],
+    ])
+    ->run();
+```

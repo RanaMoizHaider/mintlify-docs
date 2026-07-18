@@ -1,0 +1,184 @@
+---
+title: "Structured Output: JSON-Schema-Validated AI Responses"
+sidebarTitle: "Structured Output"
+description: "Use Output::schema() and Output::enum() to get type-safe, validated PHP values from any model — backed by native JSON Schema on OpenAI and adapted tool use on Anthropic."
+---
+
+Structured output instructs the model to return data that matches a shape you define, then validates the response against that shape before handing it back to you. Instead of parsing free-form text, you receive a validated PHP array — or a plain string from a constrained set of values — directly in `$result->output`.
+
+## Defining an object schema
+
+Use `Output::schema()` with a `Schema::object()` definition to request a structured JSON object. Build the schema with the same `Schema` fluent API you use for tool inputs.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Outputs\Output;
+use AiSdk\Schema;
+
+OpenAI::create();
+
+$schema = Schema::object('movie_review', 'A structured movie review', properties: [
+    Schema::string('title',    'The movie title')->required(),
+    Schema::string('director', 'Director name')->required(),
+    Schema::integer('year',    'Release year')->required(),
+    Schema::number('rating',   'Score from 0.0 to 10.0')->required(),
+    Schema::string('summary',  'One-paragraph review')->required(),
+    Schema::array(
+        Schema::string(),
+        'themes',
+        'List of thematic keywords',
+    )->required(),
+]);
+
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('Review the movie Blade Runner (1982).')
+    ->output(Output::schema($schema))
+    ->run();
+
+// $result->output is a validated PHP array matching the schema.
+$review = $result->output;
+
+echo $review['title'];            // "Blade Runner"
+echo $review['rating'];           // 9.2
+echo implode(', ', $review['themes']); // "dystopia, identity, humanity"
+```
+
+## Defining an enum output
+
+When you need the model to pick one value from a fixed list, use `Output::enum()`. The response is validated to confirm it matches one of your declared values exactly.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Anthropic;
+use AiSdk\Outputs\Output;
+
+Anthropic::create();
+
+$result = Generate::text()
+    ->model(Anthropic::model('claude-sonnet-4-5'))
+    ->prompt('Classify the following support ticket as urgent, normal, or low.')
+    ->system('Reply with only the classification.')
+    ->output(Output::enum(['urgent', 'normal', 'low']))
+    ->run();
+
+// $result->output is guaranteed to be one of 'urgent', 'normal', 'low'.
+$priority = $result->output; // e.g. 'normal'
+```
+
+## Passing a Schema directly to ->output()
+
+`PendingTextRequest::output()` accepts either an `Output` instance or a `Schema` instance directly. Passing a `Schema` wraps it automatically — a shorthand for `Output::schema($schema)`.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Schema;
+
+OpenAI::create();
+
+$schema = Schema::object('sentiment', properties: [
+    Schema::enum(['positive', 'neutral', 'negative'], 'label')->required(),
+    Schema::number('confidence', 'Model confidence 0.0–1.0')->required(),
+]);
+
+// Equivalent to Output::schema($schema):
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('The SDK documentation is fantastic!')
+    ->output($schema)
+    ->run();
+
+echo $result->output['label'];      // 'positive'
+echo $result->output['confidence']; // 0.97
+```
+
+## How the Output class works
+
+`Output` is a thin value object with two factory methods:
+
+<ResponseField name="Output::schema(Schema $schema)" type="Output">
+  When the schema has no `enum` values, creates an object-kind output. When the schema does have enum values (e.g. you passed a `Schema::enum()`), creates an enum-kind output. The SDK uses the kind to select the right encoding strategy per provider.
+</ResponseField>
+
+<ResponseField name="Output::enum(array $values)" type="Output">
+  Convenience wrapper that creates a `Schema::enum($values)` internally and wraps it as an enum-kind output. Equivalent to `Output::schema(Schema::enum($values))`.
+</ResponseField>
+
+```php
+// These produce identical Output instances:
+Output::enum(['a', 'b', 'c']);
+Output::schema(Schema::enum(['a', 'b', 'c']));
+```
+
+## SchemaValidator: how validation works
+
+The `SchemaValidator` runs after the model returns a response, before the result is handed back to your code. It enforces types, required fields, enum constraints, and rejects unknown properties in objects — the same logic used to validate tool inputs.
+
+```php
+// SchemaValidator::validate() recursively checks the decoded JSON:
+//  - null is rejected unless the schema is ->nullable()
+//  - enum values must match exactly (strict comparison)
+//  - string/integer/number/boolean types are checked with is_* functions
+//  - arrays must be lists (array_is_list), items are validated recursively
+//  - objects are checked for required fields and unknown keys
+//  - additionalProperties: false is emitted in the JSON Schema sent to OpenAI
+```
+
+<Warning>
+  If the model returns data that fails validation, the SDK throws `SchemaValidationException`. This is rare with modern models when you use `Output::schema()`, but can happen with weaker models or ambiguous schemas. Always wrap structured output calls in a try–catch when running in production.
+</Warning>
+
+## Provider-specific behaviour
+
+<CardGroup cols={2}>
+  <Card title="OpenAI" icon="check">
+    OpenAI supports `json_schema` response format natively. The SDK sends your schema as `response_format: { type: "json_schema", json_schema: { ... } }`, which gives you deterministic, structured output without prompt engineering.
+  </Card>
+  <Card title="Anthropic" icon="wrench">
+    Anthropic does not natively support `json_schema` response format, so the SDK adapts by encoding your schema as a forced tool call. The model is instructed to call a synthetic tool whose input matches your schema, and the tool's arguments become `$result->output`. The experience is identical from your code's perspective.
+  </Card>
+</CardGroup>
+
+## Complete real-world example
+
+The following example extracts structured metadata from a user-supplied text and combines it with streaming to provide immediate feedback while validation happens at the end.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Outputs\Output;
+use AiSdk\Schema;
+
+OpenAI::create();
+
+$schema = Schema::object('article_metadata', 'Extracted article metadata', properties: [
+    Schema::string('headline',  'SEO-optimised headline, max 70 chars')->required(),
+    Schema::string('summary',   'Two-sentence summary')->required(),
+    Schema::array(Schema::string(), 'keywords', 'Up to 5 SEO keywords')->required(),
+    Schema::enum(['news', 'opinion', 'tutorial', 'review'], 'category')->required(),
+    Schema::integer('readingTimeMinutes', 'Estimated reading time in minutes')->required(),
+]);
+
+$articleText = file_get_contents('/content/article.txt');
+
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->system('You extract structured metadata from article text. Be concise and precise.')
+    ->prompt("Extract metadata from this article:\n\n{$articleText}")
+    ->output(Output::schema($schema))
+    ->run();
+
+$meta = $result->output;
+
+echo "Headline: {$meta['headline']}\n";
+echo "Category: {$meta['category']}\n";
+echo "Reading time: {$meta['readingTimeMinutes']} min\n";
+echo "Keywords: " . implode(', ', $meta['keywords']) . "\n";
+echo "Summary: {$meta['summary']}\n";
+```
+
+<Tip>
+  Design your schemas to be as specific as possible — include descriptions on every property and use `->required()` on fields the model must always populate. Clear constraints lead to more consistent results and fewer validation failures.
+</Tip>

@@ -1,0 +1,269 @@
+---
+title: "Test AI Calls Using Built-In Fakes Without HTTP Calls"
+sidebarTitle: "Testing"
+description: "Swap real provider models for built-in fake implementations that return controlled responses without making any HTTP calls or requiring API credentials."
+---
+
+The PHP AI SDK ships a complete set of fake model implementations under `AiSdk\Testing\Fakes`. Each fake implements the same model interface as its real counterpart, so you can wire one in anywhere a real model is accepted — no HTTP mocking libraries required, and no API credentials needed in CI. Every fake also records the last request it received, giving you a clean way to assert on what your code sent.
+
+## Wiring fakes with Generate::configure()
+
+The recommended approach for test suites is to build an `Sdk` that uses fake models and register it with `Generate::configure()` at the start of each test. Call `Generate::reset()` in the teardown to remove the static state:
+
+```php
+use AiSdk\Generate;
+use AiSdk\Support\SdkFactory;
+use AiSdk\Testing\Fakes\FakeTextModel;
+
+beforeEach(function () {
+    $sdk = (new SdkFactory())
+        ->withDefaultTextModel(FakeTextModel::text('Hello from the fake.'))
+        ->make();
+
+    Generate::configure($sdk);
+});
+
+afterEach(fn() => Generate::reset());
+
+it('returns the configured fake response', function () {
+    $result = Generate::text('Any prompt')->run();
+
+    expect($result->text)->toBe('Hello from the fake.');
+});
+```
+
+Alternatively, pass the fake directly with `->model()` on any pending request. This is useful when only one test in a suite needs a fake:
+
+```php
+$result = Generate::text('Any prompt')
+    ->model(FakeTextModel::text('Inline fake response.'))
+    ->run();
+```
+
+## FakeTextModel
+
+`FakeTextModel` supports both non-streaming and streaming text generation.
+
+<ParamField body="FakeTextModel::text(string $text)" type="static">
+  Creates a fake that returns `$text` as the full text response when `run()` is called.
+</ParamField>
+
+<ParamField body="FakeTextModel::streaming(string ...$chunks)" type="static">
+  Creates a fake that yields each `$chunk` as a `TextDeltaPart` when the response is streamed. A `FinishPart` is appended automatically after the last chunk.
+</ParamField>
+
+<ParamField body="$fake->lastRequest" type="?TextModelRequest">
+  The last `TextModelRequest` passed to `generate()` or `stream()`. Use this to assert on prompts, tools, reasoning config, and provider options.
+</ParamField>
+
+<CodeGroup>
+```php PestPHP — non-streaming
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeTextModel;
+
+it('passes the system prompt to the model', function () {
+    $fake = FakeTextModel::text('Mocked reply.');
+
+    Generate::text('Translate this to French.')
+        ->model($fake)
+        ->system('You are a professional translator.')
+        ->run();
+
+    expect($fake->lastRequest?->system)
+        ->toBe('You are a professional translator.');
+});
+```
+
+```php PestPHP — streaming
+use AiSdk\Generate;
+use AiSdk\Streaming\TextDeltaPart;
+use AiSdk\Testing\Fakes\FakeTextModel;
+
+it('streams chunks in order', function () {
+    $fake = FakeTextModel::streaming('Hello', ', ', 'world', '!');
+
+    $chunks = [];
+    foreach (Generate::text('Greet me')->model($fake)->stream()->chunks() as $chunk) {
+        $chunks[] = $chunk;
+    }
+
+    expect($chunks)->toBe(['Hello', ', ', 'world', '!']);
+});
+```
+
+```php PHPUnit — non-streaming
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeTextModel;
+use PHPUnit\Framework\TestCase;
+
+class SummariserTest extends TestCase
+{
+    public function test_summariser_returns_model_text(): void
+    {
+        $fake = FakeTextModel::text('A short summary.');
+        $sdk  = (new \AiSdk\Support\SdkFactory())
+            ->withDefaultTextModel($fake)
+            ->make();
+
+        $result = $sdk->text('Long article here...')->run();
+
+        $this->assertSame('A short summary.', $result->text);
+    }
+}
+```
+</CodeGroup>
+
+## FakeImageModel
+
+<ParamField body="FakeImageModel::image(string $base64, string $mimeType)" type="static">
+  Creates a fake image model that returns an `ImageResponse` containing a single `ImageData` with the supplied base-64 string and MIME type. Defaults are `'aW1hZ2U='` and `'image/png'`.
+</ParamField>
+
+```php
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeImageModel;
+
+it('generates an image with the given prompt', function () {
+    $fake = FakeImageModel::image(base64_encode('fake-png-bytes'), 'image/png');
+
+    $result = Generate::image('A blue sky.')
+        ->model($fake)
+        ->size('1024x1024')
+        ->run();
+
+    expect($result->output->base64)->toBe(base64_encode('fake-png-bytes'))
+        ->and($fake->lastRequest?->prompt)->toBe('A blue sky.')
+        ->and($fake->lastRequest?->size)->toBe('1024x1024');
+});
+```
+
+## FakeSpeechModel
+
+<ParamField body="FakeSpeechModel::speech(string $data, string $mimeType)" type="static">
+  Returns a `SpeechResponse` containing an `AudioData` with the supplied raw audio bytes and MIME type. Defaults are `'audio-bytes'` and `'audio/mpeg'`.
+</ParamField>
+
+```php
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeSpeechModel;
+
+it('synthesises speech and records voice choice', function () {
+    $fake = FakeSpeechModel::speech('pcm-data', 'audio/wav');
+
+    $result = Generate::speech('Read this aloud.')
+        ->model($fake)
+        ->voice('coral')
+        ->run();
+
+    expect($result->output->data)->toBe('pcm-data')
+        ->and($fake->lastRequest?->voice)->toBe('coral');
+});
+```
+
+## FakeTranscriptionModel
+
+<ParamField body="FakeTranscriptionModel::transcription(string $text)" type="static">
+  Returns a `TranscriptionResponse` containing a `TranscriptData` with the supplied text. Defaults to `'Hello from audio.'`.
+</ParamField>
+
+```php
+use AiSdk\Content;
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeTranscriptionModel;
+
+it('transcribes audio and returns controlled text', function () {
+    $fake  = FakeTranscriptionModel::transcription('The quick brown fox.');
+    $audio = Content::audio('raw-bytes', mimeType: 'audio/wav', filename: 'speech.wav');
+
+    $result = Generate::transcription($audio)->model($fake)->run();
+
+    expect($result->output->text)->toBe('The quick brown fox.')
+        ->and($fake->lastRequest?->audio)->toBe($audio);
+});
+```
+
+## FakeEmbeddingModel
+
+<ParamField body="FakeEmbeddingModel::embedding(array<int, float> $vector)" type="static">
+  Returns an `EmbeddingResponse` with a single `EmbeddingData` containing the supplied float vector. Defaults to `[0.1, 0.2, 0.3]`.
+</ParamField>
+
+```php
+use AiSdk\Generate;
+use AiSdk\Testing\Fakes\FakeEmbeddingModel;
+
+it('returns the configured embedding vector', function () {
+    $fake = FakeEmbeddingModel::embedding([0.6, 0.7, 0.8]);
+
+    $result = Generate::embedding('A sentence.')
+        ->model($fake)
+        ->run();
+
+    expect($result->output->vector)->toBe([0.6, 0.7, 0.8])
+        ->and($fake->lastRequest?->inputs)->toBe(['A sentence.']);
+});
+```
+
+## FakeVideoModel
+
+`FakeVideoModel` simulates the asynchronous polling loop that video generation requires. You control how many `poll()` calls succeed before the job transitions to `Succeeded`.
+
+<ParamField body="new FakeVideoModel(string $id, int $pollsUntilComplete)" type="constructor">
+  Creates a video fake that returns a `VideoJob` with status `Running` for the first `$pollsUntilComplete - 1` polls, then returns `Succeeded` with a `VideoData` URL of `https://example.com/video.mp4`.
+</ParamField>
+
+```php
+use AiSdk\Generate;
+use AiSdk\Responses\VideoJob;
+use AiSdk\Testing\Fakes\FakeVideoModel;
+
+it('waits for the video job to complete', function () {
+    $fake = new FakeVideoModel(pollsUntilComplete: 3);
+
+    $result = Generate::video('A timelapse of a flower blooming.')
+        ->model($fake)
+        ->duration(10)
+        ->run(timeout: 30, pollIntervalMs: 0);
+
+    expect($result->output->url)->toBe('https://example.com/video.mp4')
+        ->and($fake->lastRequest?->output?->duration)->toBe(10.0);
+});
+
+it('returns a job immediately in async mode', function () {
+    $job = Generate::videoJob('A rocket launch.')
+        ->model(new FakeVideoModel())
+        ->async();
+
+    expect($job)->toBeInstanceOf(VideoJob::class)
+        ->and($job->id)->toBe('fake-job');
+});
+```
+
+## Asserting on requests
+
+Every fake exposes a `$fake->lastRequest` property typed to the appropriate request class. Use it to verify that your code sets the right parameters before forwarding the request to the model:
+
+```php
+use AiSdk\Generate;
+use AiSdk\Reasoning;
+use AiSdk\Testing\Fakes\FakeTextModel;
+
+it('enables high reasoning effort when the feature flag is on', function () {
+    $fake = FakeTextModel::text('Deep answer.');
+
+    myApp()->featureFlags()->enable('deep_reasoning');
+
+    Generate::text('Hard question.')
+        ->model($fake)
+        ->reasoning(Reasoning::effort('high'))
+        ->maxTokens(8000)
+        ->run();
+
+    expect($fake->lastRequest?->reasoning?->effort)->toBe('high')
+        ->and($fake->lastRequest?->maxTokens)->toBe(8000);
+});
+```
+
+<Tip>
+  The fakes live in `AiSdk\Testing\Fakes` and are autoloaded by the main package — you do not need to add a separate dev dependency or Composer `autoload-dev` entry to use them in your tests.
+</Tip>

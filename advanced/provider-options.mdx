@@ -1,0 +1,182 @@
+---
+title: "Pass Provider-Specific Options to Any Pending Request"
+sidebarTitle: "Provider Options"
+description: "Pass provider-namespaced parameters to any pending request with providerOptions(), and merge arbitrary fields with the 'raw' escape hatch."
+---
+
+Every modality in the SDK — text, image, speech, transcription, embedding, and video — exposes a `providerOptions()` method on its pending request. This method lets you pass parameters that only make sense for a specific provider without polluting the portable request interface. Options you set for one provider are silently ignored by all others, so you can configure provider-specific behaviour safely even in multi-provider applications.
+
+## The providerOptions() method
+
+`->providerOptions(string $provider, array $options)` accepts the provider name as its first argument and a flat or nested array of key-value pairs as its second. Multiple calls for the same provider are merged so you can build options incrementally.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+$result = Generate::text('Write a haiku about PHP.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->providerOptions('openai', [
+        'frequency_penalty' => 0.5,
+        'presence_penalty'  => 0.3,
+        'seed'              => 42,
+    ])
+    ->run();
+```
+
+<Note>
+  The provider name must match the string returned by `Model::provider()` for that model — for example `'openai'` for OpenAI models and `'anthropic'` for Anthropic models. Options for non-matching providers are carried along in the request object but never sent over the wire.
+</Note>
+
+## Provider-specific options in action
+
+<CodeGroup>
+```php OpenAI-specific options
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+$result = Generate::text('Explain how HTTPS works.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->maxTokens(2048)
+    ->providerOptions('openai', [
+        'frequency_penalty' => 0.4,
+        'logprobs'          => true,
+        'top_logprobs'      => 5,
+    ])
+    ->run();
+
+echo $result->text;
+```
+
+```php Anthropic-specific options
+use AiSdk\Generate;
+use AiSdk\Anthropic;
+
+$result = Generate::text('Summarise the history of the internet.')
+    ->model(Anthropic::model('claude-opus-4-5'))
+    ->maxTokens(4096)
+    ->providerOptions('anthropic', [
+        'top_k' => 40,
+    ])
+    ->run();
+
+echo $result->text;
+```
+
+```php Multiple providers simultaneously
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+// If you swap models at runtime, each provider only sees its own options
+$pending = Generate::text('Describe a sunset.')
+    ->providerOptions('openai', ['frequency_penalty' => 0.2])
+    ->providerOptions('anthropic', ['top_k' => 50]);
+
+// Use whichever model is active — only the matching options are sent
+$result = $pending->model(OpenAI::model('gpt-4o-mini'))->run();
+```
+</CodeGroup>
+
+## The raw escape hatch
+
+When a provider exposes a parameter that the SDK does not handle natively, you can merge it directly into the outgoing JSON body using the special `'raw'` key inside your provider options array. The `raw` value must be an array; it is merged over the assembled request body using `array_replace`, so your fields take precedence over SDK-generated ones.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+$result = Generate::text('What day is it?')
+    ->model(OpenAI::model('gpt-4o'))
+    ->providerOptions('openai', [
+        'raw' => [
+            'store'    => true,           // Store the completion
+            'metadata' => ['user' => 'u_123'],
+        ],
+    ])
+    ->run();
+```
+
+<Warning>
+  Fields inside `'raw'` bypass all SDK validation and are sent verbatim to the provider API. A typo or an invalid value will surface as an `InvalidRequestException` from the provider rather than a local error. Prefer named, validated options when they are available.
+</Warning>
+
+### Combining named options and raw fields
+
+Named provider options and `raw` are not mutually exclusive. The SDK applies named options first and then overlays `raw` on top, so `raw` can override any field including those the SDK set itself.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Anthropic;
+
+$result = Generate::text('Translate this to Spanish: Hello, world.')
+    ->model(Anthropic::model('claude-haiku-4-5'))
+    ->providerOptions('anthropic', [
+        'top_k' => 30,
+        'raw'   => [
+            // Overrides any SDK-generated field for this key
+            'metadata' => ['user_id' => 'user_abc'],
+        ],
+    ])
+    ->run();
+```
+
+## Reading options back from request objects
+
+The immutable `TextModelRequest` (and its siblings for other modalities) exposes `providerOptionsFor(string $provider)` to retrieve the options slice for one provider. This is primarily used by provider adapters, but it is also useful when writing custom adapters or inspecting requests in tests.
+
+```php
+use AiSdk\Requests\TextModelRequest;
+
+// Inside a custom provider adapter or a test
+public function generate(TextModelRequest $request): TextModelResponse
+{
+    $options = $request->providerOptionsFor('myprovider');
+    // $options is an array<string, mixed> containing only 'myprovider' keys
+    $raw = $options['raw'] ?? [];
+
+    $body = $this->buildBody($request);
+    if (is_array($raw)) {
+        $body = array_replace($body, $raw);
+    }
+
+    // ...
+}
+```
+
+## providerOptions() on other modalities
+
+`HasProviderOptions` is a trait used by all pending request classes, so the same `->providerOptions()` pattern works for every modality:
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Content;
+
+// Image generation
+$image = Generate::image('A snow-capped mountain at dawn.')
+    ->model(OpenAI::model('dall-e-3'))
+    ->providerOptions('openai', ['style' => 'vivid', 'quality' => 'hd'])
+    ->run();
+
+// Speech synthesis
+$speech = Generate::speech('Hello from the PHP AI SDK.')
+    ->model(OpenAI::model('tts-1'))
+    ->providerOptions('openai', ['speed' => 1.2])
+    ->run();
+
+// Embeddings
+$embedding = Generate::embedding('A sentence to embed.')
+    ->model(OpenAI::model('text-embedding-3-small'))
+    ->providerOptions('openai', ['encoding_format' => 'float'])
+    ->run();
+
+// Transcription
+$transcript = Generate::transcription(Content::audio($audioBytes, mimeType: 'audio/wav'))
+    ->model(OpenAI::model('whisper-1'))
+    ->providerOptions('openai', ['language' => 'en', 'temperature' => 0.0])
+    ->run();
+```
+
+<Tip>
+  When you add `providerOptions()` calls for a provider and then swap to a different model, no options leak to the new provider. This makes `providerOptions()` safe to pre-configure on a shared pending-request template that selects its model at the last moment.
+</Tip>

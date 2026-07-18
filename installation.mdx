@@ -1,0 +1,253 @@
+---
+title: "Installing the PHP AI SDK via Composer"
+sidebarTitle: "Installation"
+description: "System requirements, per-package Composer commands, environment variable reference, and programmatic provider configuration for the PHP AI SDK."
+---
+
+The PHP AI SDK is distributed as a set of focused Composer packages — install only what your project needs. This page covers system requirements, package-by-package installation commands, every supported environment variable, and how to configure providers programmatically when environment variables are not the right fit.
+
+## System requirements
+
+Before you install, confirm your environment meets these minimums:
+
+| Requirement | Minimum version |
+|---|---|
+| PHP | 8.3 |
+| Composer | 2.x |
+| PSR-18 HTTP client | Any (Guzzle 7.8+ bundled with `aisdk/core`) |
+
+<Info>
+  `aisdk/core` declares `guzzlehttp/guzzle ^7.8` as a direct dependency and uses `php-http/discovery ^1.19` for PSR-18 auto-discovery. If your application already provides a different PSR-18 client (e.g., Symfony's `HttpClient`), discovery picks it up automatically and Guzzle becomes unused.
+</Info>
+
+## Installing packages
+
+Install only the packages your application needs. Start with `aisdk/core` plus your chosen provider.
+
+<CodeGroup>
+
+```bash Core only
+# The generation facade, streaming engine, tool system, schema,
+# and testing fakes. Required by every provider package.
+composer require aisdk/core
+```
+
+```bash OpenAI provider
+# Adds GPT-4o, o3, DALL·E, Whisper, TTS, embeddings, and Realtime.
+# Pulls in aisdk/core and aisdk/openai-compatible automatically.
+composer require aisdk/openai
+```
+
+```bash Anthropic provider
+# Adds Claude models (claude-sonnet-4, claude-opus-4, etc.).
+# Pulls in aisdk/core automatically.
+composer require aisdk/anthropic
+```
+
+```bash OpenAI-compatible helpers
+# Shared Chat Completions and Responses API wire helpers.
+# Usually installed indirectly via aisdk/openai; install directly
+# only when building a custom OpenAI-compatible provider.
+composer require aisdk/openai-compatible
+```
+
+```bash Transport (Live sessions)
+# WebSocket and HTTP/2 transport implementations for Live::voice(),
+# Live::transcribe(), and Live::translate().
+# Requires PHP Fibers and the Amp v3 event loop.
+composer require aisdk/transport
+```
+
+```bash All packages
+# Install everything at once for a full-featured setup.
+composer require aisdk/core aisdk/openai aisdk/anthropic aisdk/transport
+```
+
+</CodeGroup>
+
+<Note>
+  `aisdk/openai` already depends on `aisdk/openai-compatible`, so you never need to install `aisdk/openai-compatible` separately when using the official OpenAI provider.
+</Note>
+
+## Environment variable configuration
+
+Both the OpenAI and Anthropic providers read configuration from environment variables when you do not pass values explicitly to `create()`. Set these in your shell, `.env` file, or deployment secrets.
+
+### OpenAI
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `OPENAI_API_KEY` | **Yes** | — | Your OpenAI secret key (`sk-...`) |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1` | Override to point at a proxy or compatible endpoint |
+| `OPENAI_ORGANIZATION` | No | — | Organization ID sent as the `OpenAI-Organization` header |
+
+### Anthropic
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | **Yes** | — | Your Anthropic secret key (`sk-ant-...`) |
+| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com/v1` | Override for proxies or alternative deployments |
+| `ANTHROPIC_VERSION` | No | `2023-06-01` | The `anthropic-version` header value sent with every request |
+
+<Warning>
+  The SDK throws `MissingApiKeyException` immediately when it cannot find an API key — either in the config array or the corresponding environment variable. Always ensure the variable is set before any code calls `OpenAI::create()` or `Anthropic::create()`.
+</Warning>
+
+## Programmatic configuration
+
+Pass a config array to `::create()` when you want to provide values at runtime — for example, from a database, a secrets manager, or a DI container — rather than relying on environment variables.
+
+### OpenAI
+
+```php
+<?php
+
+use AiSdk\OpenAI;
+
+// Minimal: provide the API key.
+OpenAI::create([
+    'apiKey' => 'sk-...',
+]);
+
+// Full options.
+OpenAI::create([
+    'apiKey'       => 'sk-...',
+    'baseUrl'      => 'https://your-proxy.example.com/v1',
+    'organization' => 'org-...',
+    'headers'      => ['X-Custom-Header' => 'value'],
+]);
+```
+
+### Anthropic
+
+```php
+<?php
+
+use AiSdk\Anthropic;
+
+// Minimal: provide the API key.
+Anthropic::create([
+    'apiKey' => 'sk-ant-...',
+]);
+
+// Full options.
+Anthropic::create([
+    'apiKey'   => 'sk-ant-...',
+    'baseUrl'  => 'https://your-proxy.example.com/v1',
+    'version'  => '2023-06-01',
+    'headers'  => ['X-Custom-Header' => 'value'],
+]);
+```
+
+`OpenAI::create()` and `Anthropic::create()` return the provider instance **and** store it as the static default. Every subsequent call to `OpenAI::model('...')` or `Anthropic::model('...')` uses that default provider, so you only need to call `create()` once per provider per request lifecycle.
+
+<Tip>
+  In a long-running process (e.g., a queue worker or a server using FrankenPHP), call `OpenAI::reset()` and `Anthropic::reset()` between requests if you need to swap keys or configuration. The `Generate::reset()` method clears the generation facade's stored SDK instance at the same time.
+</Tip>
+
+## Multiple providers side by side
+
+Both facades can be active at the same time. Configure each once and reference the appropriate model when building a request.
+
+```php
+<?php
+
+use AiSdk\Anthropic;
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create(['apiKey' => 'sk-...']);
+Anthropic::create(['apiKey' => 'sk-ant-...']);
+
+// Route different tasks to different providers.
+$summaryResult = Generate::text('Summarize this article: ...')
+    ->model(OpenAI::model('gpt-4o-mini'))
+    ->run();
+
+$analysisResult = Generate::text('Analyse the sentiment of: ...')
+    ->model(Anthropic::model('claude-sonnet-4'))
+    ->run();
+```
+
+## HTTP client auto-discovery
+
+`aisdk/core` uses `php-http/discovery` to locate a PSR-18 HTTP client, a PSR-17 request factory, and a PSR-17 stream factory in your project. Because `aisdk/core` bundles Guzzle 7.8+, discovery succeeds out of the box with no extra configuration.
+
+If you want to substitute a different HTTP client — for example, to share connection pools or apply middleware — install any PSR-18-compliant client. Discovery finds it automatically:
+
+```bash
+# Example: use Symfony's HTTP client adapter
+composer require symfony/http-client nyholm/psr7
+```
+
+To configure the HTTP client manually (e.g., to pass it a custom Guzzle handler stack), create an `AiSdk\Support\Sdk` instance and call `Generate::configure()` before your first generation call:
+
+```php
+<?php
+
+use AiSdk\Generate;
+use AiSdk\Support\Sdk;
+use GuzzleHttp\Client;
+use GuzzleHttp\HandlerStack;
+use Nyholm\Psr7\Factory\Psr17Factory;
+
+$stack = HandlerStack::create();
+// Push your Guzzle middleware onto $stack here...
+
+$factory = new Psr17Factory();
+
+Generate::configure(new Sdk(
+    httpClient: new \GuzzleHttp\Client(['handler' => $stack]),
+    requestFactory: $factory,
+    streamFactory: $factory,
+));
+
+// Provider facades will use this SDK instance automatically.
+```
+
+## Live session transport
+
+Live sessions (voice, transcription, translation) require persistent WebSocket or HTTP/2 connections. Install `aisdk/transport` to get the ready-made implementations:
+
+```bash
+composer require aisdk/transport
+```
+
+The `Transport` facade exposes three factory methods:
+
+```php
+<?php
+
+use AiSdk\Transport;
+
+// Auto-selects WebSocket or HTTP/2 based on the provider model.
+$transport = Transport::auto();
+
+// Explicit WebSocket transport with custom timeouts.
+$transport = Transport::webSocket(
+    maximumMessageBytes: 16_777_216,
+    connectTimeout: 10.0,
+    tlsHandshakeTimeout: 10.0,
+);
+
+// Explicit HTTP/2 transport.
+$transport = Transport::http2(
+    connectTimeout: 10.0,
+    tlsHandshakeTimeout: 10.0,
+);
+```
+
+<Note>
+  `aisdk/transport` depends on the Amp v3 async I/O library (`amphp/amp`, `amphp/http-client`, `amphp/websocket-client`). These packages use PHP Fibers for concurrency, which requires PHP 8.1+ (already satisfied by the SDK's PHP 8.3 minimum). No separate event-loop setup is needed for typical usage.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    See a working text generation example and your first streaming and tool-calling code.
+  </Card>
+  <Card title="Providers" icon="plug" href="/providers">
+    Learn every configuration option for OpenAI, Anthropic, and custom endpoints.
+  </Card>
+</CardGroup>

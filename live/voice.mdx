@@ -1,0 +1,334 @@
+---
+title: "Real-Time Voice Sessions with Live::voice() — PHP SDK"
+sidebarTitle: "Voice"
+description: "Open full-duplex voice sessions, stream audio and text, handle tool calls automatically, and connect browsers via WebRTC with Live::voice()."
+---
+
+`Live::voice()` opens a full-duplex voice session between your application and a model. You configure the session with a fluent builder, call `connect()` to establish the connection, and then stream audio frames in while consuming a continuous sequence of typed events — audio deltas, transcript updates, tool calls, and more. The session stays open until either side closes it, which makes it suitable for voice assistants, telephony agents, and any scenario where the model needs to speak and listen simultaneously.
+
+## Building a voice session
+
+`Live::voice()` returns a `PendingVoiceRequest` you configure before connecting. All setter methods return the same instance so you can chain them.
+
+```php
+use AiSdk\Live;
+use AiSdk\Transport;
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->instructions('You are a helpful assistant.')
+    ->voice('alloy')
+    ->language('en')
+    ->inputAudioFormat('pcm16')
+    ->outputAudioFormat('pcm16')
+    ->turnDetection('server_vad')
+    ->connect(Transport::auto());
+```
+
+### Builder methods
+
+<Accordion title="model(Model $model)">
+Sets the Live-capable model to use for the session. The model must implement `LiveModelInterface`.
+</Accordion>
+
+<Accordion title="instructions(string $instructions)">
+Sets the system-level instructions the model follows throughout the session. Equivalent to a system prompt in a batch generation call.
+
+```php
+Live::voice()->instructions('You are a helpful assistant who speaks concisely.');
+```
+</Accordion>
+
+<Accordion title="voice(string $voice)">
+Selects the synthesized voice the model uses for audio output. Accepted values depend on the provider (for example `'alloy'`, `'echo'`, `'shimmer'` for OpenAI).
+
+```php
+Live::voice()->voice('shimmer');
+```
+</Accordion>
+
+<Accordion title="turnDetection(string|array|null $turnDetection)">
+Controls how the model detects when you have finished speaking. Pass a string shorthand (`'server_vad'`), a provider-specific configuration array, or `null` to disable automatic detection and commit audio manually.
+
+```php
+// Enable server-side VAD
+Live::voice()->turnDetection('server_vad');
+
+// Disable turn detection (push-to-talk style)
+Live::voice()->turnDetection(null);
+```
+</Accordion>
+
+<Accordion title="language(string $language)">
+Hints the primary language of the session as a BCP-47 tag (for example `'en'`, `'fr'`, `'ja'`). Improves transcription accuracy and voice naturalness.
+</Accordion>
+
+<Accordion title="inputAudioFormat(string $format) / outputAudioFormat(string $format)">
+Sets the audio encoding for inbound and outbound audio. Common values are `'pcm16'` and `'g711_ulaw'`; check your provider's documentation for the full list.
+</Accordion>
+
+<Accordion title="tools(array $tools) / tool(Tool $tool)">
+Registers one or more `Tool` instances the model may invoke during the session. Each tool must have a unique non-empty name. The SDK validates names at call time and throws `InvalidArgumentException` on duplicates.
+
+```php
+use AiSdk\Tool;
+
+$weather = Tool::make('get_weather', fn(array $args) => fetchWeather($args['location']))
+    ->description('Returns current weather for a location.')
+    ->parameter('location', 'string', 'City name', required: true);
+
+Live::voice()
+    ->tool($weather)
+    ->connect(Transport::auto());
+```
+</Accordion>
+
+## Sending data to the session
+
+Once you have a `LiveSession`, call these methods to push data toward the model.
+
+```php
+// Stream raw audio bytes (PCM16, G.711, etc.)
+$session->sendAudio($audioChunk);
+
+// Send a text message (for models that support mixed-mode input)
+$session->sendText('What is the weather in Paris?');
+
+// Signal that you have finished speaking (when turn detection is disabled)
+$session->commitAudio();
+
+// Discard buffered audio without committing it
+$session->clearAudio();
+
+// Ask the model to generate a response immediately
+$session->requestResponse();
+
+// Cancel the model's in-progress response
+$session->cancelResponse();
+
+// Send a tool result back after handling a ToolCallEvent yourself
+$session->sendToolResult($callId, $result);
+
+// Gracefully close the session
+$session->close();
+```
+
+<Note>
+`commitAudio()` is only necessary when turn detection is disabled or set to `null`. When `server_vad` is active, the model commits audio automatically when it detects silence.
+</Note>
+
+## Consuming events
+
+Iterate `$session->events()` in a `foreach` loop to receive all events from the model. The method yields `LiveEvent` subclass instances in the order the provider emits them.
+
+```php
+use AiSdk\Live\AudioDelta;
+use AiSdk\Live\TextDelta;
+use AiSdk\Live\SpeechStarted;
+use AiSdk\Live\SpeechStopped;
+use AiSdk\Live\ToolCallEvent;
+use AiSdk\Live\ToolResultEvent;
+use AiSdk\Live\ResponseCompleted;
+use AiSdk\Live\UsageEvent;
+use AiSdk\Live\LiveError;
+use AiSdk\Live\LiveClosed;
+
+foreach ($session->events() as $event) {
+    match (true) {
+        $event instanceof AudioDelta      => outputAudio($event->bytes),
+        $event instanceof TextDelta       => print($event->delta),
+        $event instanceof SpeechStarted   => log('User started speaking at ' . $event->audioStartMs . ' ms'),
+        $event instanceof SpeechStopped   => log('User stopped speaking at ' . $event->audioEndMs . ' ms'),
+        $event instanceof ToolCallEvent   => handleTool($session, $event),
+        $event instanceof ToolResultEvent => log('Tool ' . $event->name . ' returned result (auto=' . ($event->automatic ? 'true' : 'false') . ')'),
+        $event instanceof ResponseCompleted => log('Response ' . $event->responseId . ' complete'),
+        $event instanceof UsageEvent      => log('Usage: ' . json_encode($event->usage)),
+        $event instanceof LiveError       => log('Error ' . $event->code . ': ' . $event->message),
+        $event instanceof LiveClosed      => null, // loop ends naturally
+        default                           => null,
+    };
+}
+```
+
+### Event reference
+
+<Accordion title="AudioDelta — audio.delta">
+Carries a chunk of synthesized audio bytes from the model. Buffer or play back `$event->bytes` in real time.
+
+```php
+if ($event instanceof AudioDelta) {
+    fwrite($audioStream, $event->bytes);
+}
+```
+</Accordion>
+
+<Accordion title="TextDelta — text.delta">
+Carries an incremental text fragment from the model's response. Concatenate `$event->delta` values to reconstruct the full text.
+</Accordion>
+
+<Accordion title="SpeechStarted — speech.started">
+Fires when the model detects that the user has begun speaking. `$event->audioStartMs` is the timestamp (in milliseconds) within the current audio buffer, if the provider reports it.
+</Accordion>
+
+<Accordion title="SpeechStopped — speech.stopped">
+Fires when the model detects that the user has stopped speaking. `$event->audioEndMs` is the end timestamp.
+</Accordion>
+
+<Accordion title="ToolCallEvent — tool.call">
+The model wants to invoke a tool. Properties: `$event->callId` (unique call identifier), `$event->name` (tool name), `$event->arguments` (decoded argument array). If you registered the tool with a handler via `->tool()`, the session executes it automatically and yields a `ToolResultEvent` with `automatic = true`. Otherwise, handle it yourself and call `$session->sendToolResult()`.
+
+```php
+if ($event instanceof ToolCallEvent) {
+    $result = yourToolHandler($event->name, $event->arguments);
+    $session->sendToolResult($event->callId, $result);
+}
+```
+</Accordion>
+
+<Accordion title="ToolResultEvent — tool.result">
+Emitted after a tool result is sent, both for automatic (SDK-handled) and manual calls. Check `$event->automatic` to distinguish the two cases.
+</Accordion>
+
+<Accordion title="ResponseCompleted — response.completed">
+Signals that the model has finished generating a full response. `$event->responseId` identifies the turn; `$event->response` contains raw provider metadata.
+</Accordion>
+
+<Accordion title="UsageEvent — usage">
+Reports token or audio usage for the session. `$event->usage` is an associative array with numeric values whose keys depend on the provider (for example `['input_tokens' => 80, 'output_tokens' => 120]`).
+</Accordion>
+
+<Accordion title="LiveError — error">
+Indicates a recoverable or non-recoverable error from the provider. `$event->message` describes the problem; `$event->code` and `$event->details` carry provider-specific context.
+</Accordion>
+
+<Accordion title="LiveClosed — closed">
+The final event in any session. `$event->code` is the WebSocket close code (if applicable) and `$event->reason` is a human-readable description. The `foreach` loop ends naturally after this event.
+</Accordion>
+
+## Automatic tool execution
+
+When you register tools using `->tool()` or `->tools()`, the `events()` loop automatically calls the tool's handler on each `ToolCallEvent`, sends the result back to the model via `sendToolResult()`, and yields a `ToolResultEvent` with `automatic = true`. You do not need to call `sendToolResult()` yourself for those tools.
+
+```php
+use AiSdk\Live;
+use AiSdk\Live\AudioDelta;
+use AiSdk\Tool;
+use AiSdk\Transport;
+
+$lookup = Tool::make('lookup_order', fn(array $args) => lookupOrder($args['order_id']))
+    ->description('Returns the status of a customer order.')
+    ->parameter('order_id', 'string', 'The order ID to look up', required: true);
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->tool($lookup)
+    ->connect(Transport::auto());
+
+foreach ($session->events() as $event) {
+    // ToolCallEvent is handled and ToolResultEvent yielded automatically —
+    // you only need to act on events that matter to your application.
+    if ($event instanceof AudioDelta) {
+        outputAudio($event->bytes);
+    }
+}
+```
+
+<Tip>
+Tools without a handler are yielded as `ToolCallEvent` instances but not automatically executed. Attach a handler with `Tool::make('name', $handler)` or `$tool->handler($callable)` to enable automatic execution.
+</Tip>
+
+## Complete example
+
+<CodeGroup>
+```php Voice session with tool
+use AiSdk\Live;
+use AiSdk\Live\AudioDelta;
+use AiSdk\Live\LiveClosed;
+use AiSdk\Live\LiveError;
+use AiSdk\Tool;
+use AiSdk\Transport;
+
+$weather = Tool::make('get_weather', function (array $args): string {
+    return json_encode(['temperature' => '22°C', 'condition' => 'Sunny']);
+})
+    ->description('Returns the current weather.')
+    ->parameter('location', 'string', 'City name', required: true);
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->instructions('You are a friendly assistant.')
+    ->voice('alloy')
+    ->inputAudioFormat('pcm16')
+    ->outputAudioFormat('pcm16')
+    ->turnDetection('server_vad')
+    ->tool($weather)
+    ->connect(Transport::auto());
+
+// Stream audio from a microphone or file
+$session->sendAudio(file_get_contents('greeting.pcm'));
+
+foreach ($session->events() as $event) {
+    if ($event instanceof AudioDelta) {
+        // Play back audio bytes
+        fwrite(STDOUT, $event->bytes);
+    }
+
+    if ($event instanceof LiveError) {
+        fwrite(STDERR, 'Error: ' . $event->message . PHP_EOL);
+    }
+
+    if ($event instanceof LiveClosed) {
+        break;
+    }
+}
+
+$session->close();
+```
+</CodeGroup>
+
+## WebRTC for browser connections
+
+For browser-based clients you can use WebRTC instead of a server-side WebSocket. The SDK provides two methods on `PendingVoiceRequest` for this purpose.
+
+### clientSecret()
+
+Returns a short-lived `ClientSecret` you pass to the browser so it can connect directly to the provider without exposing your API key.
+
+```php
+use AiSdk\Live;
+
+$secret = Live::voice()
+    ->model(/* your model */)
+    ->voice('alloy')
+    ->clientSecret();
+
+// Send $secret->value and $secret->expiresAt to the browser
+return response()->json([
+    'client_secret' => $secret->value,
+    'expires_at'    => $secret->expiresAt,
+    'session_id'    => $secret->sessionId,
+]);
+```
+
+### webRtc(string $offerSdp)
+
+Performs the SDP exchange on behalf of a browser client that has already created an RTCPeerConnection. Pass the browser's SDP offer and return the answer SDP to the client.
+
+```php
+use AiSdk\Live;
+
+// $offerSdp comes from the browser's RTCPeerConnection.createOffer()
+$answer = Live::voice()
+    ->model(/* your model */)
+    ->voice('alloy')
+    ->webRtc($offerSdp);
+
+return response()->json([
+    'sdp'     => $answer->sdp,
+    'call_id' => $answer->callId,
+]);
+```
+
+<Warning>
+`clientSecret()` and `webRtc()` are only available on models that implement `LiveClientSecretModelInterface` and `LiveWebRtcModelInterface` respectively. Calling them on an unsupported model throws `InvalidArgumentException`.
+</Warning>

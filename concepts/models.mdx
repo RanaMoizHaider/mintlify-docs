@@ -1,0 +1,161 @@
+---
+title: "Models: Selecting and Configuring AI Models"
+sidebarTitle: "Models"
+description: "Learn how the PHP AI SDK represents models as opaque references, how to select them, set a default, and understand what capabilities each model exposes."
+---
+
+A model in the PHP AI SDK is a lightweight opaque reference — it records which provider owns it and what model ID to send on the wire, but it doesn't open a connection or validate anything until you actually call a generation method. This design lets you declare your model choice once and pass it around freely without worrying about resource lifetime.
+
+## Obtaining a model reference
+
+You get a model reference by calling `::model(string $modelId)` on a provider facade. The method returns a `ProviderModel` instance that implements the `Model` contract.
+
+<CodeGroup>
+```php OpenAI
+use AiSdk\OpenAI;
+
+$model = OpenAI::model('gpt-4o');
+$mini  = OpenAI::model('gpt-4o-mini');
+$o3    = OpenAI::model('o3');           // reasoning model
+```
+
+```php Anthropic
+use AiSdk\Anthropic;
+
+$sonnet = Anthropic::model('claude-sonnet-4-5');
+$opus   = Anthropic::model('claude-opus-4-5');
+$haiku  = Anthropic::model('claude-haiku-4-5');
+```
+</CodeGroup>
+
+## How ProviderModel works
+
+`ProviderModel` is a `final readonly` class that stores three things: the provider name, the model ID string, and a private resolver closure supplied by the provider. When an SDK operation needs a concrete adapter (e.g. a `TextModelInterface` to run a generation), it calls `resolve(string $contract)` on the model reference, which the provider translates into the appropriate model adapter.
+
+```php
+final readonly class ProviderModel implements ResolvableModelInterface
+{
+    public function provider(): string  { return $this->providerName; }
+    public function modelId(): string   { return $this->id; }
+
+    public function resolve(string $contract): Model
+    {
+        return ($this->resolver)($contract);
+    }
+}
+```
+
+You never call `resolve()` yourself — the SDK does it internally when you call `->run()` or `->stream()`.
+
+## Setting a process-level default model
+
+Call `Generate::model(Model $model)` once during bootstrap to set the model used by all subsequent `Generate::text()` calls that don't supply an explicit `->model()` override.
+
+```php
+use AiSdk\OpenAI;
+use AiSdk\Generate;
+
+// Set once, for example in a Laravel service provider:
+OpenAI::create();
+Generate::model(OpenAI::model('gpt-4o'));
+
+// Later, no explicit model needed:
+$result = Generate::text('Summarise this article: …')->run();
+
+// You can still override per-request:
+$cheap = Generate::text('Quick question')
+    ->model(OpenAI::model('gpt-4o-mini'))
+    ->run();
+```
+
+<Tip>
+  Call `Generate::reset()` in tests to clear the stored default between test cases.
+</Tip>
+
+## Model capabilities
+
+The `Capability` enum lists every feature the SDK can interrogate. Providers advertise capabilities on their model adapters so the SDK can surface a clear error if you ask an unsupported model for, say, image generation.
+
+<CardGroup cols={2}>
+  <Card title="Text & Reasoning" icon="text">
+    - `Capability::TextGeneration` — generate text responses
+    - `Capability::Reasoning` — extended chain-of-thought (o3, claude thinking)
+    - `Capability::Streaming` — stream tokens as they arrive
+  </Card>
+  <Card title="Tool Use & Output" icon="wrench">
+    - `Capability::ToolCalling` — invoke external functions
+    - `Capability::StructuredOutput` — enforce a JSON schema on the response
+  </Card>
+  <Card title="Media Generation" icon="image">
+    - `Capability::ImageGeneration` — generate images from text
+    - `Capability::SpeechGeneration` — synthesise speech from text
+    - `Capability::Transcription` — transcribe audio to text
+    - `Capability::VideoGeneration` — generate video from text
+    - `Capability::Embedding` — produce vector embeddings
+  </Card>
+  <Card title="Multimodal Inputs" icon="microphone">
+    - `Capability::TextInput` — accept text in the prompt
+    - `Capability::ImageInput` — accept images in the prompt
+    - `Capability::AudioInput` — accept audio in the prompt
+    - `Capability::VideoInput` — accept video in the prompt
+    - `Capability::FileInput` — accept file attachments
+  </Card>
+</CardGroup>
+
+```php
+use AiSdk\Capability;
+
+// The Capability enum provides stable, portable identifiers.
+// Providers map these to their own internal feature flags.
+echo Capability::TextGeneration->name();   // 'text_generation'
+echo Capability::StructuredOutput->name(); // 'structured_output'
+echo Capability::ImageInput->name();       // 'image_input'
+
+// Resolve a Capability from a string (e.g. from a config value):
+$cap = Capability::fromName('tool_calling'); // Capability::ToolCalling
+```
+
+## Choosing the right model
+
+<Accordion title="OpenAI model guide">
+  | Model | Best for | Key capabilities |
+  |---|---|---|
+  | `gpt-4o` | General-purpose, vision, tool use | Text, Images, Tools, Structured Output, Streaming |
+  | `gpt-4o-mini` | Cost-sensitive production workloads | Text, Tools, Streaming |
+  | `o3` | Hard reasoning tasks | Text, Reasoning, Tools |
+  | `o4-mini` | Fast reasoning, lower cost | Text, Reasoning, Tools |
+  | `dall-e-3` | High-quality image generation | Image Generation |
+  | `tts-1` / `tts-1-hd` | Speech synthesis | Speech Generation |
+  | `whisper-1` | Audio transcription | Transcription |
+  | `text-embedding-3-small` | Fast, cheap embeddings | Embedding |
+</Accordion>
+
+<Accordion title="Anthropic model guide">
+  | Model | Best for | Key capabilities |
+  |---|---|---|
+  | `claude-opus-4-5` | Complex, nuanced tasks | Text, Tools, Structured Output, Vision |
+  | `claude-sonnet-4-5` | Balanced performance and cost | Text, Tools, Structured Output, Vision, Streaming |
+  | `claude-haiku-4-5` | Speed-critical applications | Text, Tools, Streaming |
+</Accordion>
+
+## Reusing model references
+
+Because `ProviderModel` is a `final readonly` value object, you can cache references freely. Storing them in a container binding or a constant avoids re-calling `::model()` in hot paths.
+
+```php
+use AiSdk\OpenAI;
+use AiSdk\Contracts\Model;
+
+// Bind as a named service in your DI container:
+$container->singleton('ai.gpt4o', fn () => OpenAI::model('gpt-4o'));
+$container->singleton('ai.mini',  fn () => OpenAI::model('gpt-4o-mini'));
+
+// Then inject wherever needed:
+function summarise(string $text, Model $model): string
+{
+    return \AiSdk\Generate::text("Summarise: {$text}")
+        ->model($model)
+        ->run()
+        ->text;
+}
+```

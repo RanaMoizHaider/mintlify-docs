@@ -1,0 +1,245 @@
+---
+title: "Tools: Giving Models Access to External Functions"
+sidebarTitle: "Tools"
+description: "Define callable tools with inline closures or class-based handlers, build typed schemas, control tool selection policies, and run automatic multi-step loops."
+---
+
+Tool calling lets the model request that your application execute a function and pass the result back, enabling it to look up live data, perform calculations, write to external systems, and more. The SDK handles the full request–execute–respond loop automatically — you define the tools, the model decides when to use them.
+
+## Defining a tool with Tool::make()
+
+The fluent builder approach is the quickest way to define an inline tool. Chain `->named()` for the name the model sees, `->for()` for a description, `->input()` for the parameter schema, and `->run()` for the handler.
+
+```php
+use AiSdk\Tool;
+use AiSdk\Schema;
+
+$weather = Tool::make('get_weather')
+    ->for('Return the current weather for a given city.')
+    ->input(
+        Schema::object('input', properties: [
+            Schema::string('city', 'The city to look up, e.g. "Paris"')->required(),
+            Schema::enum(['celsius', 'fahrenheit'], 'unit', 'Temperature unit')->required(),
+        ])
+    )
+    ->run(function (array $input): string {
+        // $input is validated and type-checked by SchemaValidator before reaching here.
+        $city = $input['city'];
+        $unit = $input['unit'];
+
+        // Replace with a real weather API call.
+        return "The weather in {$city} is 22°" . strtoupper($unit[0]);
+    });
+```
+
+## Using a class-based tool
+
+For complex tools you want to test in isolation, inject dependencies into, or reuse across multiple requests, extend `Tool` and implement `__invoke`.
+
+```php
+use AiSdk\Tool;
+use AiSdk\Schema;
+
+class SearchProductsTool extends Tool
+{
+    public function __construct(private ProductRepository $repo)
+    {
+        parent::__construct(
+            name: 'search_products',
+            description: 'Search the product catalogue by keyword.',
+            input: Schema::object('input', properties: [
+                Schema::string('query', 'Search keyword or phrase')->required(),
+                Schema::integer('limit', 'Maximum results to return'),
+            ]),
+        );
+    }
+
+    public function __invoke(array $input): array
+    {
+        return $this->repo->search(
+            query: $input['query'],
+            limit: $input['limit'] ?? 10,
+        );
+    }
+}
+```
+
+Instantiate the class-based tool and pass it directly to `->tools()`:
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$tool = new SearchProductsTool(new ProductRepository());
+
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('Find me wireless keyboards under $50.')
+    ->tools($tool)
+    ->maxSteps(5) // Allow up to 5 tool-use rounds.
+    ->run();
+
+echo $result->text;
+```
+
+## Building schemas
+
+The `Schema` class covers every JSON Schema primitive you need for tool inputs and structured output. Every factory method accepts an optional `$name` and `$description`. Mark a property required by chaining `->required()`, and nullable by chaining `->nullable()`.
+
+<CodeGroup>
+```php Primitives
+use AiSdk\Schema;
+
+Schema::string('title', 'Article headline');
+Schema::integer('year', 'Publication year')->required();
+Schema::number('score', 'Relevance score 0–1')->nullable();
+Schema::boolean('published', 'Is the article live?');
+```
+
+```php Arrays and enums
+use AiSdk\Schema;
+
+// Array of strings.
+Schema::array(Schema::string(), 'tags', 'List of topic tags');
+
+// Enum — generates a string type with an "enum" constraint.
+Schema::enum(['low', 'medium', 'high'], 'priority', 'Task priority');
+```
+
+```php Nested objects
+use AiSdk\Schema;
+
+Schema::object('address', 'Mailing address', properties: [
+    Schema::string('street')->required(),
+    Schema::string('city')->required(),
+    Schema::string('postcode')->required(),
+    Schema::string('country')->required(),
+]);
+```
+</CodeGroup>
+
+## Controlling tool selection with ToolChoice
+
+By default the model chooses whether to call a tool (`auto`). You can override that with `->toolChoice()`.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\ToolChoice;
+
+OpenAI::create();
+
+// auto — model decides (default).
+Generate::text()->tools($weather)->toolChoice(ToolChoice::auto());
+
+// none — never call tools, even if they are registered.
+Generate::text()->tools($weather)->toolChoice(ToolChoice::none());
+
+// required — must call at least one tool before replying.
+Generate::text()->tools($weather)->toolChoice(ToolChoice::required());
+
+// tool — force a specific tool to be called.
+Generate::text()->tools($weather)->toolChoice(ToolChoice::tool('get_weather'));
+```
+
+## The automatic multi-step loop
+
+When a model returns tool calls, the SDK can automatically execute them and feed the results back for another round of generation. Set `->maxSteps()` to the maximum number of request–execute–respond cycles you allow. The loop stops as soon as the model produces a final text response without requesting further tool calls.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('What is the weather in Tokyo and London?')
+    ->tools($weather)
+    ->maxSteps(10) // Allow up to 10 request/execute/respond cycles.
+    ->run();
+
+echo $result->text;
+// "The weather in Tokyo is 28°C and in London it is 14°C."
+
+// Inspect which tools were called.
+foreach ($result->toolCalls as $call) {
+    echo "{$call->name}: " . json_encode($call->arguments) . "\n";
+}
+```
+
+<Warning>
+  Set a sensible `maxSteps` limit. Without one, a misbehaving model could loop indefinitely. The default is `1`, which means the SDK executes tools once and then returns — always raise it explicitly when you need multi-step behaviour.
+</Warning>
+
+## Accessing request context in a handler
+
+If your tool needs access to metadata — the tool call ID, the tool name, the full message history up to this point — declare a `ToolExecutionContext` parameter as the **last** argument of your handler. The SDK detects the type hint via reflection and injects the context automatically.
+
+```php
+use AiSdk\Tool;
+use AiSdk\Schema;
+use AiSdk\ToolExecutionContext;
+
+$auditedTool = Tool::make('delete_record')
+    ->for('Delete a record by ID.')
+    ->input(
+        Schema::object('input', properties: [
+            Schema::string('id', 'Record ID to delete')->required(),
+        ])
+    )
+    ->run(function (array $input, ToolExecutionContext $ctx): string {
+        // $ctx->toolCallId  — the unique ID assigned by the model.
+        // $ctx->toolName    — 'delete_record'
+        // $ctx->arguments   — the raw validated argument array.
+        // $ctx->messages    — the conversation history up to this call.
+
+        auditLog("Tool {$ctx->toolName} called in call {$ctx->toolCallId}");
+        deleteRecord($input['id']);
+
+        return 'Record deleted.';
+    });
+```
+
+## Grouping tools with ToolPackageInterface
+
+For large applications, organise related tools into a package by implementing `ToolPackageInterface`. Pass the package instance to `->tools()` exactly as you would a single tool.
+
+```php
+use AiSdk\ToolPackageInterface;
+use AiSdk\Tool;
+use AiSdk\Schema;
+
+class CalendarPackage implements ToolPackageInterface
+{
+    public function tools(): iterable
+    {
+        yield Tool::make('list_events')
+            ->for('List calendar events for a date range.')
+            ->input(Schema::object('input', properties: [
+                Schema::string('from', 'Start date YYYY-MM-DD')->required(),
+                Schema::string('to',   'End date YYYY-MM-DD')->required(),
+            ]))
+            ->run(fn (array $input) => fetchEvents($input['from'], $input['to']));
+
+        yield Tool::make('create_event')
+            ->for('Create a new calendar event.')
+            ->input(Schema::object('input', properties: [
+                Schema::string('title', 'Event title')->required(),
+                Schema::string('date',  'Date YYYY-MM-DD')->required(),
+                Schema::string('time',  'Time HH:MM')->required(),
+            ]))
+            ->run(fn (array $input) => createEvent($input));
+    }
+}
+
+// Pass the package to ->tools() — all tools are registered automatically.
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('Schedule a team lunch for next Friday at noon.')
+    ->tools(new CalendarPackage())
+    ->maxSteps(5)
+    ->run();
+```

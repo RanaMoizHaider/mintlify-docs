@@ -1,0 +1,231 @@
+---
+title: "Generating Images from Text Prompts with PHP AI SDK"
+sidebarTitle: "Images"
+description: "Use Generate::image() to produce one or more images from a text prompt, then access base64 data, URLs, dimensions, and save files to disk."
+---
+
+`Generate::image()` gives you a fluent builder for image generation that works across any provider that implements `ImageModelInterface`. You describe the image, set optional sizing and quality parameters, and call `run()` to receive an `ImageResult` containing every generated image as an `ImageData` object ready to inspect, encode, or save.
+
+## Basic usage
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::image('A neon-lit PHP elephant standing on a circuit board')
+    ->run();
+
+// The first (or only) image is always available on $result->output
+echo $result->output->url;         // CDN URL, if the provider returns one
+echo $result->output->mimeType;    // e.g. "image/png"
+```
+
+## Builder methods
+
+<AccordionGroup>
+  <Accordion title="prompt(string $prompt)">
+    Sets the text description the model uses to generate the image. A prompt is required; `run()` throws `InvalidArgumentException` when it is empty or whitespace.
+
+    ```php
+    Generate::image()
+        ->prompt('A watercolour map of Ireland at golden hour')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="count(int $count)">
+    Requests multiple images in a single API call. The value must be at least `1`. All generated images appear in `$result->images`; `$result->output` always points to the first one.
+
+    ```php
+    Generate::image('A minimalist PHP logo')
+        ->count(4)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="size(string $size)">
+    Requests a specific pixel resolution. The value must match the pattern `{width}x{height}`, for example `'1024x1024'` or `'1792x1024'`. Not all providers support every size; check provider documentation for valid values.
+
+    ```php
+    Generate::image('Wide landscape with mountains')
+        ->size('1792x1024')
+        ->run();
+    ```
+
+    Common sizes:
+
+    | Value | Aspect |
+    |---|---|
+    | `512x512` | 1:1 (square, small) |
+    | `1024x1024` | 1:1 (square) |
+    | `1024x1792` | 9:16 (portrait) |
+    | `1792x1024` | 16:9 (landscape) |
+  </Accordion>
+
+  <Accordion title="aspectRatio(string $aspectRatio)">
+    Requests an aspect ratio without fixing the resolution. The value must match `{width}:{height}`, for example `'16:9'` or `'3:2'`. Use either `size()` or `aspectRatio()` depending on whether your provider prefers pixel counts or ratios.
+
+    ```php
+    Generate::image('Cinematic skyline shot')
+        ->aspectRatio('21:9')
+        ->run();
+    ```
+
+    Common aspect ratios:
+
+    | Value | Use case |
+    |---|---|
+    | `1:1` | Social media square |
+    | `4:3` | Presentation slides |
+    | `16:9` | Widescreen / video |
+    | `9:16` | Portrait / mobile |
+    | `3:2` | Photography |
+    | `21:9` | Cinematic |
+  </Accordion>
+
+  <Accordion title="seed(int $seed)">
+    Pins the random seed for reproducible results. When you pass the same prompt and seed, the provider returns the same image (provider permitting).
+
+    ```php
+    Generate::image('A PHP developer at a standing desk')
+        ->seed(42)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default model for this request.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::image('Abstract data visualisation')
+        ->model(ProviderModel::openai('dall-e-3'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific parameters that the SDK does not expose natively. Options are scoped by provider name to prevent collisions when you switch providers.
+
+    ```php
+    Generate::image('A dramatic PHP logo')
+        ->providerOptions('openai', ['style' => 'vivid', 'quality' => 'hd'])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## The ImageResult object
+
+`run()` returns an `ImageResult` with the following fields:
+
+<ResponseField name="output" type="ImageData" required>
+  The first generated image. This is a convenience alias for `$result->images[0]`.
+</ResponseField>
+
+<ResponseField name="images" type="ImageData[]" required>
+  All generated images, including the first. When you call `count(4)`, this array contains four `ImageData` objects.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Token or image-unit consumption reported by the provider. Contains `inputTokens` and `outputTokens` where applicable.
+</ResponseField>
+
+## The ImageData object
+
+Each image in `$result->images` is an `ImageData` instance:
+
+<ResponseField name="base64" type="string|null">
+  Base64-encoded binary content of the image. `null` when the provider returns a URL instead of raw bytes.
+</ResponseField>
+
+<ResponseField name="url" type="string|null">
+  A CDN or pre-signed URL pointing to the image. `null` when the provider returns raw bytes instead of a URL.
+</ResponseField>
+
+<ResponseField name="mimeType" type="string">
+  The MIME type of the image, for example `'image/png'` or `'image/webp'`. Defaults to `'image/png'`.
+</ResponseField>
+
+<ResponseField name="width" type="int|null">
+  Pixel width of the image when the provider includes dimensions in the response.
+</ResponseField>
+
+<ResponseField name="height" type="int|null">
+  Pixel height of the image when the provider includes dimensions in the response.
+</ResponseField>
+
+### ImageData methods
+
+<ParamField body="bytes()" type="string|null">
+  Decodes `base64` and returns the raw binary string. Returns `null` if `base64` is `null` or the encoded data is not valid base64.
+</ParamField>
+
+<ParamField body="save(string $path)" type="string">
+  Decodes the base64 content and writes the binary bytes to `$path`. Returns `$path` on success. Throws `AiSdkException` when `base64` is `null` or the file cannot be written.
+</ParamField>
+
+## Generating multiple images
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::image('A PHP mascot in various art styles')
+    ->count(4)
+    ->size('1024x1024')
+    ->run();
+
+echo "Generated {count($result->images)} images\n";
+
+foreach ($result->images as $i => $image) {
+    echo "Image {$i}: mimeType={$image->mimeType}\n";
+}
+```
+
+## Saving an image to disk
+
+When a provider returns base64-encoded bytes, use `save()` to write the file directly:
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::image('A minimalist elephant logo on a white background')
+    ->size('512x512')
+    ->run();
+
+$image = $result->output;
+
+// Write to disk
+$path = $image->save('/var/www/public/generated/elephant.png');
+echo "Saved to {$path}\n";
+
+// Or work with the raw bytes yourself
+$bytes = $image->bytes();
+file_put_contents('/tmp/elephant_copy.png', $bytes);
+```
+
+<Note>
+  Some providers (such as OpenAI DALL-E 3 in URL mode) return a `url` instead of `base64`. In that case, `bytes()` returns `null` and `save()` throws. Download the image from `$image->url` first when you need to persist it.
+</Note>
+
+## Encoding for HTTP responses
+
+Serve a generated image inline from a PHP endpoint without writing to disk:
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::image('A product hero shot on a gradient background')
+    ->size('1024x1024')
+    ->run();
+
+$image = $result->output;
+
+header('Content-Type: ' . $image->mimeType);
+echo $image->bytes();
+exit;
+```
+
+<Warning>
+  Always validate that `$image->bytes()` is not `null` before echoing it. If the provider returned a URL, the response will be empty.
+</Warning>

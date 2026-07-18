@@ -1,0 +1,78 @@
+---
+title: "Real-Time (Live) API Overview — PHP AI SDK Guide"
+sidebarTitle: "Overview"
+description: "Run persistent voice, transcription, and translation sessions over WebSocket or HTTP/2 with the Live API's three entry points and LiveSession."
+---
+
+The Live API lets you open a persistent, bidirectional session with a model so audio and text flow continuously in both directions — rather than the single-request, single-response model of batch generation. Every session stays open until you call `close()`, which means the model can speak, listen, and react to interruptions in real time. Three operations cover all common real-time use cases: `Voice` for conversational audio with optional tool calls, `Transcribe` for streaming speech-to-text, and `Translate` for live speech-to-speech translation.
+
+## How the Live API differs from batch generation
+
+Batch generation with `Generate::text()` or `Generate::speech()` is stateless — each call is independent and returns a finished result. The Live API is stateful: you establish a connection, stream audio or text frames into the session, and consume a continuous stream of typed events as the model responds. This makes it suitable for telephony, voice assistants, live captioning, and real-time translation, where latency and interactivity matter more than throughput.
+
+## Entry points
+
+The `Live` facade exposes three static factory methods. Each returns a builder you configure with a fluent API before calling `connect()` to open the session.
+
+```php
+use AiSdk\Live;
+
+// Conversational voice session
+$pendingVoice = Live::voice();
+
+// Real-time speech-to-text
+$pendingTranscribe = Live::transcribe();
+
+// Real-time speech translation
+$pendingTranslate = Live::translate();
+```
+
+Every builder shares the same `model()` and `connect(TransportInterface $transport)` methods inherited from `PendingLiveRequest`. Calling `connect()` returns a `LiveSession` instance you use to send and receive data.
+
+## The LiveSession facade
+
+`LiveSession` wraps the provider's session driver and exposes a uniform API regardless of which transport or model you use. You stream data in with methods like `sendAudio()` and `sendText()`, and you consume responses by iterating `events()`, which yields typed `LiveEvent` subclasses.
+
+```php
+use AiSdk\Live;
+use AiSdk\Live\AudioDelta;
+use AiSdk\Live\LiveClosed;
+use AiSdk\Transport;
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->connect(Transport::auto());
+
+foreach ($session->events() as $event) {
+    if ($event instanceof AudioDelta) {
+        // stream $event->bytes to your audio output
+    }
+
+    if ($event instanceof LiveClosed) {
+        break;
+    }
+}
+```
+
+## The aisdk/transport package
+
+The `aisdk/transport` Composer package provides ready-made transport implementations built on [amphp](https://amphp.org). Install it alongside `aisdk/core` to get `Transport::auto()`, `Transport::webSocket()`, and `Transport::http2()`. If you prefer, you can implement `TransportInterface` yourself — the core package defines the interface and no concrete transport is required.
+
+```bash
+composer require aisdk/core aisdk/transport
+```
+
+<CardGroup cols={2}>
+  <Card title="Voice" icon="microphone" href="/live/voice">
+    Build full-duplex voice sessions with tool calling, turn detection, and WebRTC support.
+  </Card>
+  <Card title="Transcription" icon="closed-captioning" href="/live/transcription">
+    Stream audio into a session and receive partial and final transcripts in real time.
+  </Card>
+  <Card title="Translation" icon="language" href="/live/translation">
+    Translate speech from one language to another with simultaneous audio and transcript output.
+  </Card>
+  <Card title="Transports" icon="plug" href="/live/transports">
+    Configure WebSocket and HTTP/2 transports, or build a custom transport from scratch.
+  </Card>
+</CardGroup>

@@ -1,0 +1,76 @@
+---
+title: "PHP AI SDK: Framework-Agnostic AI for PHP 8.3+"
+sidebarTitle: "Introduction"
+description: "A framework-agnostic PHP library for text generation, streaming, tool calling, structured output, multimodal input, and live audio sessions. MIT licensed."
+---
+
+The PHP AI SDK gives you a single, consistent API for working with large language models in any PHP 8.3+ application. Whether you are running Laravel, Symfony, Slim, or a plain PHP script, the SDK fits without modification — no framework adapters required, no service-provider lock-in.
+
+## What the SDK is
+
+The SDK is a collection of Composer packages built on PSR standards. The `aisdk/core` package provides the generation facade, streaming engine, tool system, schema validation, and testing fakes. Provider packages (`aisdk/openai`, `aisdk/anthropic`, `aisdk/openai-compatible`) plug into that core through well-defined interfaces so you can swap models without rewriting your application. An optional `aisdk/transport` package adds ready-made WebSocket and HTTP/2 transports for `Live` sessions.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the SDK and generate your first AI response in under five minutes.
+  </Card>
+  <Card title="Providers" icon="plug" href="/providers">
+    Configure OpenAI, Anthropic, and any OpenAI-compatible endpoint.
+  </Card>
+  <Card title="Core Concepts" icon="book-open" href="/concepts/providers">
+    Understand messages, tools, schemas, streaming, and the generation lifecycle.
+  </Card>
+  <Card title="Generating Content" icon="sparkles" href="/generating/text">
+    Text, images, speech, transcription, embeddings, and video generation.
+  </Card>
+</CardGroup>
+
+## Packages
+
+| Package | Description |
+|---|---|
+| `aisdk/core` | Generation facade, streaming, tools, schema, fakes |
+| `aisdk/openai` | Official OpenAI provider (GPT-4o, o3, Realtime, DALL·E, Whisper, TTS) |
+| `aisdk/anthropic` | Official Anthropic provider (Claude models) |
+| `aisdk/openai-compatible` | Shared wire helpers for any OpenAI-compatible API |
+| `aisdk/transport` | WebSocket and HTTP/2 transport implementations for Live sessions |
+
+## Key capabilities
+
+<AccordionGroup>
+  <Accordion title="Text generation" icon="text">
+    Call `Generate::text('Your prompt')->model(...)->run()` to get a `TextResult` back. The result exposes `$result->text`, `$result->usage`, `$result->finishReason`, and `$result->providerMetadata` — everything the provider returned, normalized into a single consistent shape.
+  </Accordion>
+
+  <Accordion title="Streaming" icon="signal-stream">
+    Replace `->run()` with `->stream()` to receive a `Stream` object. Iterate its `parts()` generator to process `TextDeltaPart` chunks as they arrive, or call `->chunks()` for a string-only generator. Hooks like `->onChunk()`, `->onToolCall()`, and `->onFinish()` let you react to events without managing the loop yourself.
+  </Accordion>
+
+  <Accordion title="Tool calling" icon="wrench">
+    Define a tool with `Tool::make('name')->input(Schema::string('param')->required())->run(fn($param) => ...)` and pass it to `->tool(...)` on your request. The SDK executes multi-step tool loops automatically — the model calls the tool, the SDK runs your handler, the result goes back to the model, and the loop continues until a final text response is ready.
+  </Accordion>
+
+  <Accordion title="Structured output" icon="brackets-curly">
+    Pass a `Schema::object(...)` to `->output(...)` and read a typed, validated value from `$result->output`. The SDK instructs the provider to emit JSON, then validates the response against your schema before returning it.
+  </Accordion>
+
+  <Accordion title="Multimodal input" icon="photo-film">
+    Build messages that mix text, images, audio, and file content using `Content::text()`, `Content::image()`, `Content::audio()`, and `Content::file()`. Each provider adapter translates the unified content representation into its own wire format automatically.
+  </Accordion>
+
+  <Accordion title="Live sessions" icon="microphone">
+    Use `Live::voice()`, `Live::transcribe()`, and `Live::translate()` for stateful, real-time audio sessions over WebSocket or HTTP/2. The `aisdk/transport` package provides `Transport::webSocket()` and `Transport::http2()` implementations, or you can supply your own by implementing `TransportInterface`.
+  </Accordion>
+
+  <Accordion title="Testing fakes" icon="flask">
+    The `aisdk/core` package ships `FakeTextModel`, `FakeImageModel`, `FakeSpeechModel`, `FakeTranscriptionModel`, `FakeEmbeddingModel`, and `FakeVideoModel` in the `AiSdk\Testing\Fakes` namespace. Pass them directly to `->model(...)` in tests to control responses and inspect what the SDK sent — no HTTP mocking needed.
+  </Accordion>
+</AccordionGroup>
+
+## Requirements and license
+
+<Info>
+  The PHP AI SDK requires **PHP 8.3 or higher** and **Composer**. The core package pulls in Guzzle as a default HTTP client via PSR-18 auto-discovery, so most projects work without additional HTTP setup.
+</Info>
+
+All packages are released under the **MIT license**. PSR-4 autoloading, PSR-18 HTTP client discovery, PSR-7 message interfaces, and PSR-11 container support are baked into the design — use whichever implementations your application already provides.

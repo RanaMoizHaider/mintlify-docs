@@ -1,0 +1,165 @@
+---
+title: "Providers: Connecting to OpenAI, Anthropic & More"
+sidebarTitle: "Providers"
+description: "A provider is a configured gateway to an AI service. Learn how to create, configure, and use providers to access models in the PHP AI SDK."
+---
+
+A provider is a configured connection to an AI service — it holds your API credentials, the base URL, and any transport-level settings, then hands you model references you can pass to generation calls. The SDK ships first-party providers for OpenAI and Anthropic, and any service that speaks the OpenAI wire format can be reached through an OpenAI-compatible provider configuration.
+
+## What is a provider?
+
+Every provider implements `ProviderInterface`, which exposes two things: a stable `name()` string that identifies the service, and a `model(string $modelId)` factory that returns an opaque `ProviderModel` reference. You never construct model adapters yourself — you ask the provider to create them and pass the result to generation helpers like `Generate::text()`.
+
+```php
+interface ProviderInterface
+{
+    public function name(): string;
+    public function model(string $modelId): Model;
+}
+```
+
+## Creating a provider
+
+### OpenAI
+
+`OpenAI::create()` reads your API key from the `OPENAI_API_KEY` environment variable by default. Call it once — usually in a service provider or bootstrap file — and the instance becomes the process-level default for all `OpenAI::model()` calls.
+
+<CodeGroup>
+```php Environment-based (recommended)
+use AiSdk\OpenAI;
+
+// Reads OPENAI_API_KEY from the environment automatically.
+OpenAI::create();
+
+$model = OpenAI::model('gpt-4o');
+```
+
+```php Programmatic config
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'       => 'sk-...',
+    'baseUrl'      => 'https://api.openai.com/v1', // default
+    'organization' => 'org-...',                   // optional
+    'headers'      => ['X-Custom-Header' => 'val'], // optional
+]);
+
+$model = OpenAI::model('gpt-4o');
+```
+</CodeGroup>
+
+The `baseUrl` option lets you point any OpenAI-compatible service (Azure OpenAI, local Ollama, proxy endpoints) at the standard provider without additional code.
+
+### Anthropic
+
+`Anthropic::create()` follows the same pattern, reading `ANTHROPIC_API_KEY` from the environment. You can also pin an API version or provide custom headers.
+
+<CodeGroup>
+```php Environment-based (recommended)
+use AiSdk\Anthropic;
+
+// Reads ANTHROPIC_API_KEY from the environment automatically.
+Anthropic::create();
+
+$model = Anthropic::model('claude-sonnet-4-5');
+```
+
+```php Programmatic config
+use AiSdk\Anthropic;
+
+Anthropic::create([
+    'apiKey'   => 'sk-ant-...',
+    'baseUrl'  => 'https://api.anthropic.com/v1', // default
+    'version'  => '2023-06-01',                   // default
+    'headers'  => [],                              // optional extra headers
+]);
+
+$model = Anthropic::model('claude-opus-4-5');
+```
+</CodeGroup>
+
+## Environment variables reference
+
+<CardGroup cols={2}>
+  <Card title="OpenAI" icon="key">
+    | Variable | Purpose |
+    |---|---|
+    | `OPENAI_API_KEY` | API key (required) |
+    | `OPENAI_BASE_URL` | Override base URL |
+    | `OPENAI_ORGANIZATION` | Organization ID |
+  </Card>
+  <Card title="Anthropic" icon="key">
+    | Variable | Purpose |
+    |---|---|
+    | `ANTHROPIC_API_KEY` | API key (required) |
+    | `ANTHROPIC_BASE_URL` | Override base URL |
+    | `ANTHROPIC_VERSION` | API version header |
+  </Card>
+</CardGroup>
+
+## The default provider pattern
+
+Both `OpenAI` and `Anthropic` are static facades that store one default provider instance per process. Calling `::create()` sets that default. Subsequent calls to `OpenAI::model()` use the stored default automatically — no need to thread a provider instance through your application.
+
+```php
+use AiSdk\OpenAI;
+use AiSdk\Generate;
+
+// Bootstrap once (e.g. in AppServiceProvider):
+OpenAI::create(['apiKey' => getenv('OPENAI_API_KEY')]);
+
+// Anywhere else in the application:
+$result = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->prompt('Hello!')
+    ->run();
+```
+
+<Tip>
+  Call `OpenAI::reset()` or `Anthropic::reset()` in tests to clear the stored default between test cases and avoid cross-test contamination.
+</Tip>
+
+## Accessing models via a provider
+
+Once you have a provider instance, call `->model(string $modelId)` on it to obtain a `ProviderModel` reference. That reference is an opaque token — it doesn't make a network call, it doesn't validate the model ID, it simply stores the provider name and model string so the SDK can resolve the right adapter when an operation starts.
+
+```php
+use AiSdk\OpenAI;
+use AiSdk\Anthropic;
+
+// Static facade shortcut (uses stored default provider):
+$gpt4o    = OpenAI::model('gpt-4o');
+$claude   = Anthropic::model('claude-sonnet-4-5');
+
+// Direct provider instance (useful when you manage the instance yourself):
+$provider = new \AiSdk\OpenAI\OpenAIProvider(
+    new \AiSdk\OpenAI\OpenAIOptions(apiKey: 'sk-...')
+);
+$model = $provider->model('gpt-4o-mini');
+```
+
+## Using an OpenAI-compatible endpoint
+
+Any service that implements the OpenAI Chat Completions wire format — Ollama, Together AI, Groq, LM Studio, and others — works by pointing `OpenAI::create()` at the custom `baseUrl`. The model IDs you pass to `->model()` are forwarded as-is to the remote service.
+
+```php
+use AiSdk\OpenAI;
+use AiSdk\Generate;
+
+// Point at a local Ollama instance.
+OpenAI::create([
+    'apiKey'   => 'ollama',               // Ollama ignores the key
+    'baseUrl'  => 'http://localhost:11434/v1',
+]);
+
+$result = Generate::text()
+    ->model(OpenAI::model('llama3.2'))
+    ->prompt('Why is PHP great?')
+    ->run();
+
+echo $result->text;
+```
+
+<Note>
+  The SDK validates your credentials lazily — errors appear only when you make the first request, not when you call `::create()`.
+</Note>

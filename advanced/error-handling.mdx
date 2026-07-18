@@ -1,0 +1,273 @@
+---
+title: "Handle Errors Using the Full SDK Exception Hierarchy"
+sidebarTitle: "Error Handling"
+description: "Catch and inspect SDK exceptions from AiSdkException base class through specific subclasses for auth errors, rate limits, validation failures, and more."
+---
+
+The PHP AI SDK maps every failure mode — from a missing API key to a provider outage — to a typed exception that carries structured context. All SDK exceptions extend `AiSdkException`, so you can catch at any level of specificity the situation demands.
+
+## The exception hierarchy
+
+```
+AiSdkException (base)
+├── ProviderException             — any provider-related failure
+│   ├── APIConnectionException    — network / transport error
+│   └── APIStatusException        — HTTP status error from the provider
+│       ├── AuthenticationException      (401)
+│       ├── PermissionDeniedException    (403)
+│       ├── NotFoundException            (404)
+│       ├── InvalidRequestException      (4xx catch-all)
+│       ├── RateLimitException           (429)
+│       ├── OverloadedException          (529)
+│       └── InternalServerException      (5xx)
+├── TransportException            — low-level transport / WebSocket failure
+├── InvalidArgumentException      — bad SDK usage (invalid argument)
+├── CapabilityNotSupportedException
+├── MissingApiKeyException
+├── NoSuchModelException
+├── SchemaValidationException
+├── InvalidToolInputException
+├── ToolExecutionException
+└── TimeoutException
+```
+
+## AiSdkException context methods
+
+Every exception carries a `context` array populated at throw time. The following helpers extract values from it:
+
+<ResponseField name="context()" type="array<string, mixed>">
+  Returns the full context array. Use this when you need all available metadata for logging.
+</ResponseField>
+
+<ResponseField name="provider()" type="string|null">
+  The provider slug (`'openai'`, `'anthropic'`, etc.) that produced the error.
+</ResponseField>
+
+<ResponseField name="modelId()" type="string|null">
+  The model identifier used in the request, when known.
+</ResponseField>
+
+<ResponseField name="status()" type="int|null">
+  The HTTP status code, for API status exceptions.
+</ResponseField>
+
+<ResponseField name="requestId()" type="string|null">
+  The provider's request or trace ID, useful when filing a support ticket.
+</ResponseField>
+
+<ResponseField name="isRetryable()" type="bool">
+  Returns `true` for status codes 408, 409, 429, 500, 502, 503, 504, and 529.
+</ResponseField>
+
+<ResponseField name="retryAfter()" type="int|null">
+  Seconds to wait before retrying, extracted from the `Retry-After` header on 429 responses.
+</ResponseField>
+
+<ResponseField name="body()" type="mixed">
+  The raw decoded response body from the provider, available on API status exceptions.
+</ResponseField>
+
+## Catching specific exceptions
+
+### Authentication and permission errors
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Exceptions\AuthenticationException;
+use AiSdk\Exceptions\PermissionDeniedException;
+use AiSdk\Exceptions\MissingApiKeyException;
+
+try {
+    $result = Generate::text('Hello')
+        ->model(OpenAI::model('gpt-4o'))
+        ->run();
+} catch (MissingApiKeyException $e) {
+    // API key was not set in the environment or constructor
+    echo "Set the {$e->context()['envVar']} environment variable.\n";
+} catch (AuthenticationException $e) {
+    // 401 — the key was present but rejected by the provider
+    echo "Invalid API key for {$e->provider()}. Status: {$e->status()}\n";
+} catch (PermissionDeniedException $e) {
+    // 403 — authenticated but not authorised for this resource
+    echo "Access denied to model {$e->modelId()} on {$e->provider()}.\n";
+}
+```
+
+### Rate limits with back-off
+
+```php
+use AiSdk\Exceptions\RateLimitException;
+use AiSdk\Exceptions\OverloadedException;
+
+function generateWithRetry(string $prompt, int $maxAttempts = 3): string
+{
+    $attempt = 0;
+    while ($attempt < $maxAttempts) {
+        try {
+            return Generate::text($prompt)
+                ->model(OpenAI::model('gpt-4o'))
+                ->run()
+                ->text;
+        } catch (RateLimitException $e) {
+            $wait = $e->retryAfter() ?? (2 ** $attempt);
+            echo "Rate limited. Retrying in {$wait}s (attempt {$attempt}/{$maxAttempts})\n";
+            sleep($wait);
+            $attempt++;
+        } catch (OverloadedException $e) {
+            // Provider is overloaded (HTTP 529)
+            sleep(5 * $attempt);
+            $attempt++;
+        }
+    }
+    throw new \RuntimeException("Gave up after {$maxAttempts} attempts.");
+}
+```
+
+### Server errors and retryable status codes
+
+```php
+use AiSdk\Exceptions\InternalServerException;
+use AiSdk\Exceptions\AiSdkException;
+
+try {
+    $result = Generate::text('Complex task')->run();
+} catch (InternalServerException $e) {
+    // 5xx error from the provider
+    if ($e->isRetryable()) {
+        // Status 500, 502, 503, or 504 — safe to retry
+        echo "Retryable server error {$e->status()} on {$e->provider()}\n";
+        echo "Request ID: {$e->requestId()}\n";
+    }
+} catch (AiSdkException $e) {
+    // Catch-all for any other SDK error
+    \logger()->error('AI request failed', $e->context());
+}
+```
+
+### Model and capability errors
+
+```php
+use AiSdk\Exceptions\NoSuchModelException;
+use AiSdk\Exceptions\CapabilityNotSupportedException;
+
+try {
+    $result = Generate::text('Generate text')
+        ->model(OpenAI::model('gpt-nonexistent'))
+        ->run();
+} catch (NoSuchModelException $e) {
+    echo "Unknown model {$e->context()['modelId']} "
+       . "on {$e->context()['provider']}.\n";
+} catch (CapabilityNotSupportedException $e) {
+    echo "The model does not support {$e->context()['capability']}.\n";
+}
+```
+
+### Schema and tool errors
+
+```php
+use AiSdk\Exceptions\SchemaValidationException;
+use AiSdk\Exceptions\InvalidToolInputException;
+use AiSdk\Exceptions\ToolExecutionException;
+
+try {
+    $result = Generate::text('Call the calculator tool with "abc"')
+        ->model($model)
+        ->tools([$calculatorTool])
+        ->run();
+} catch (InvalidToolInputException $e) {
+    // Model supplied a bad argument type or missing required field
+    echo "Tool {$e->context()['tool']} received invalid input "
+       . "at {$e->context()['path']}: expected {$e->context()['expected']}.\n";
+} catch (ToolExecutionException $e) {
+    // The tool callable itself threw an exception
+    echo "Tool {$e->context()['tool']} threw: {$e->getPrevious()?->getMessage()}\n";
+} catch (SchemaValidationException $e) {
+    // Structured output did not match the declared schema
+    echo 'Response did not match schema: ' . $e->getMessage() . "\n";
+}
+```
+
+## Exception reference
+
+<AccordionGroup>
+  <Accordion title="AuthenticationException — 401">
+    Thrown when the provider rejects the API key. Check that the key is valid, has not been revoked, and belongs to the correct organisation.
+
+    ```php
+    } catch (AuthenticationException $e) {
+        echo $e->provider(); // 'openai'
+        echo $e->status();   // 401
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="PermissionDeniedException — 403">
+    Thrown when the key is valid but the account lacks access to the requested model or resource. This commonly occurs when accessing preview or restricted models.
+  </Accordion>
+
+  <Accordion title="NotFoundException — 404">
+    Thrown when the provider reports that the requested resource (model, file, fine-tune, etc.) does not exist.
+  </Accordion>
+
+  <Accordion title="RateLimitException — 429">
+    Thrown when you exceed the provider's rate or quota limits. Call `$e->retryAfter()` to get the number of seconds the provider recommends waiting before retrying. This exception is always `isRetryable() === true`.
+  </Accordion>
+
+  <Accordion title="OverloadedException — 529">
+    Thrown when the provider is temporarily overloaded (Anthropic-specific HTTP 529). This exception is always `isRetryable() === true`.
+  </Accordion>
+
+  <Accordion title="InternalServerException — 5xx">
+    Thrown for any 5xx response from the provider. Call `$e->isRetryable()` to check whether the specific status code (500, 502, 503, 504) is generally safe to retry.
+  </Accordion>
+
+  <Accordion title="InvalidRequestException — 4xx catch-all">
+    Thrown for any 4xx response not matched by a more specific subclass. Check `$e->body()` for the provider's error detail and `$e->status()` for the exact code.
+  </Accordion>
+
+  <Accordion title="MissingApiKeyException">
+    Thrown before any HTTP call is made when a provider is constructed without an API key and the expected environment variable is also absent. The `context` array includes `'envVar'` with the expected variable name.
+  </Accordion>
+
+  <Accordion title="CapabilityNotSupportedException">
+    Thrown when you request a capability (e.g., structured output, reasoning) on a model that does not support it. The `context` array includes `'capability'`, `'provider'`, and `'modelId'`.
+  </Accordion>
+
+  <Accordion title="SchemaValidationException">
+    Thrown when structured output mode is active but the model's response does not satisfy the declared JSON schema.
+  </Accordion>
+
+  <Accordion title="InvalidToolInputException">
+    Thrown during tool execution when the model's supplied arguments fail type or presence validation. The `context` array includes `'tool'`, `'path'`, `'expected'`, and `'actualType'`.
+  </Accordion>
+
+  <Accordion title="NoSuchModelException">
+    Thrown by providers when a model ID does not exist in the provider's registry. The `context` array includes `'provider'`, `'modelId'`, and `'modelType'`.
+  </Accordion>
+
+  <Accordion title="ToolExecutionException">
+    Wraps any exception thrown by a tool callable during execution. The original throwable is accessible via `$e->getPrevious()`.
+  </Accordion>
+
+  <Accordion title="TransportException">
+    Thrown for low-level transport failures, including WebSocket errors in Live sessions. Not an HTTP status error; represents a connectivity-level problem.
+  </Accordion>
+</AccordionGroup>
+
+## Retryable status codes
+
+The following HTTP status codes set `isRetryable()` to `true`:
+
+| Status | Meaning |
+|---|---|
+| 408 | Request Timeout |
+| 409 | Conflict |
+| 429 | Rate Limited |
+| 500 | Internal Server Error |
+| 502 | Bad Gateway |
+| 503 | Service Unavailable |
+| 504 | Gateway Timeout |
+| 529 | Provider Overloaded |
+
+All other status codes return `false` from `isRetryable()`. A `4xx` error that is not in this list (e.g., 400 or 401) represents a client-side problem that a retry will not fix.

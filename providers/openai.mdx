@@ -1,0 +1,424 @@
+---
+title: "OpenAI Provider for the PHP AI SDK — aisdk/openai"
+sidebarTitle: "OpenAI"
+description: "Configure and use the aisdk/openai package to call every OpenAI capability — text, images, speech, embeddings, and live sessions."
+---
+
+The `aisdk/openai` package is the official OpenAI provider for the PHP AI SDK. It wraps every OpenAI API surface — Chat Completions, Responses, Images, Audio, Embeddings, and the Realtime API — behind the SDK's single fluent interface. You install one Composer package, point it at your API key, and every feature follows the same pattern.
+
+## Installation
+
+<Steps>
+  <Step title="Require the package">
+    ```bash
+    composer require aisdk/openai
+    ```
+
+    `aisdk/openai` depends on `aisdk/core` and `aisdk/openai-compatible`, so both are pulled in automatically.
+  </Step>
+  <Step title="Set your API key">
+    The provider reads `OPENAI_API_KEY` from the environment by default. Export it before running your application or add it to your `.env` file.
+
+    ```bash
+    export OPENAI_API_KEY=sk-...
+    ```
+  </Step>
+  <Step title="Create the provider">
+    Call `OpenAI::create()` once at boot time. Every subsequent call to `OpenAI::model()` will use this registered provider.
+
+    ```php
+    use AiSdk\OpenAI;
+
+    OpenAI::create();
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Configuration
+
+`OpenAI::create()` accepts an optional associative array. Any key you omit falls back to the corresponding environment variable, and any variable you omit falls back to the documented default.
+
+```php
+use AiSdk\OpenAI;
+
+OpenAI::create([
+    'apiKey'       => 'sk-...',               // env: OPENAI_API_KEY (required)
+    'baseUrl'      => 'https://api.openai.com/v1', // env: OPENAI_BASE_URL
+    'organization' => 'org-...',              // env: OPENAI_ORGANIZATION (optional)
+    'headers'      => ['X-Custom' => 'value'], // merged into every request
+]);
+```
+
+<CardGroup cols={2}>
+  <Card title="apiKey" icon="key">
+    Your OpenAI secret key. Read from `OPENAI_API_KEY` when not supplied. Sent as `Authorization: Bearer <key>` on every request.
+  </Card>
+  <Card title="baseUrl" icon="link">
+    Base URL for all API calls. Defaults to `https://api.openai.com/v1`. Override to point at a proxy or a compatible endpoint.
+  </Card>
+  <Card title="organization" icon="building">
+    Optional OpenAI organization ID. When set, the SDK adds `OpenAI-Organization: <id>` to every request. Read from `OPENAI_ORGANIZATION`.
+  </Card>
+  <Card title="headers" icon="code">
+    An associative array of extra HTTP headers merged into every outgoing request. Useful for proxy authentication or internal routing headers.
+  </Card>
+</CardGroup>
+
+<Note>
+  You can also supply a pre-configured `sdk` key (an `AiSdk\Support\Sdk` instance) to inject a custom HTTP client, request factory, or stream factory. See the [SDK configuration](/advanced/sdk-configuration) guide for details.
+</Note>
+
+---
+
+## Obtaining a model
+
+Call `OpenAI::model()` with any model ID that OpenAI supports. The returned `Model` object is passed directly to any `Generate::*()` fluent builder.
+
+```php
+use AiSdk\OpenAI;
+
+$model = OpenAI::model('gpt-4o');
+```
+
+If you registered the provider with `OpenAI::create()` at boot, you can call `OpenAI::model()` from anywhere in your application and it always uses the same configured provider.
+
+---
+
+## Supported capabilities
+
+The table below lists every SDK capability and the recommended OpenAI model for it.
+
+| Capability | Description | Recommended models |
+|---|---|---|
+| Text generation | Single-turn and multi-turn chat | `gpt-4o`, `gpt-4o-mini` |
+| Streaming | Token-by-token streaming via `Generate::text()->stream()` | `gpt-4o`, `gpt-4o-mini` |
+| Tool calling | Parallel function/tool calls with automatic loop | `gpt-4o`, `gpt-4o-mini` |
+| Structured output | Native JSON Schema mode (`json_schema`) | `gpt-4o`, `gpt-4o-mini` |
+| Reasoning | `reasoning_effort` on o-series models | `o3`, `o4-mini` |
+| Embeddings | Dense vector embeddings | `text-embedding-3-small`, `text-embedding-3-large` |
+| Image generation | Text-to-image via `/images/generations` | `dall-e-3`, `gpt-image-1` |
+| Speech (TTS) | Text-to-speech audio synthesis | `tts-1`, `tts-1-hd` |
+| Transcription (STT) | Audio file transcription | `whisper-1`, `gpt-4o-transcribe` |
+| Live voice | Real-time two-way audio via Realtime API | `gpt-4o-realtime-preview` |
+| Live transcription | Real-time speech-to-text | `gpt-4o-mini-transcribe` |
+| Live translation | Real-time audio translation | `gpt-4o-mini-realtime-preview` |
+| WebRTC | Browser-side ephemeral sessions | `gpt-4o-realtime-preview` |
+| Webhooks | Verified event delivery | — |
+
+---
+
+## Text generation
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::text('What is the capital of France?')
+    ->model(OpenAI::model('gpt-4o'))
+    ->run();
+
+echo $result->text; // "Paris"
+```
+
+### Streaming
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$stream = Generate::text('Tell me a short story.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->stream();
+
+foreach ($stream as $chunk) {
+    echo $chunk->text;
+}
+```
+
+### Structured output
+
+OpenAI supports native `json_schema` structured output. Pass an `Output::schema()` or an `Output::object()` to get back a decoded, validated PHP array.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Outputs\Output;
+use AiSdk\Schema;
+
+OpenAI::create();
+
+$result = Generate::text('Extract the name and age from: "Alice is 30 years old."')
+    ->model(OpenAI::model('gpt-4o'))
+    ->output(Output::schema(Schema::object([
+        'name' => Schema::string(),
+        'age'  => Schema::integer(),
+    ])))
+    ->run();
+
+// $result->structured['name'] === 'Alice'
+// $result->structured['age']  === 30
+```
+
+### Reasoning (o-series models)
+
+Use `Reasoning::effort()` to control how much time an o-series model spends thinking. The SDK maps the portable effort level to OpenAI's `reasoning_effort` parameter automatically.
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Reasoning;
+
+OpenAI::create();
+
+$result = Generate::text('Solve: if 3x + 7 = 22, what is x?')
+    ->model(OpenAI::model('o4-mini'))
+    ->reasoning(Reasoning::effort('high'))
+    ->run();
+
+echo $result->text;
+```
+
+<Tip>
+  Temperature is omitted automatically for o-series reasoning models. The SDK detects model IDs matching `^o\d` or `^gpt-5` and applies the correct `ChatRequestProfile` without any extra configuration from you.
+</Tip>
+
+---
+
+## Image generation
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::image('A photorealistic red fox in a snowy forest')
+    ->model(OpenAI::model('dall-e-3'))
+    ->run();
+
+// $result->images[0]->url — URL to the generated image
+```
+
+<Note>
+  `dall-e-3` returns a URL. `gpt-image-1` returns base64-encoded image data. The SDK normalizes both into the same `ImageResponse` shape.
+</Note>
+
+---
+
+## Speech synthesis
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::speech('Hello, world!')
+    ->model(OpenAI::model('tts-1'))
+    ->run();
+
+file_put_contents('hello.mp3', $result->audio);
+```
+
+---
+
+## Transcription
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::transcription(audioPath: '/path/to/audio.mp3')
+    ->model(OpenAI::model('whisper-1'))
+    ->run();
+
+echo $result->text;
+```
+
+---
+
+## Embeddings
+
+```php
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$result = Generate::embeddings(['PHP is great', 'AI is fun'])
+    ->model(OpenAI::model('text-embedding-3-small'))
+    ->run();
+
+// $result->embeddings[0] — float[] vector for the first input
+```
+
+---
+
+## Provider-specific options
+
+You can pass any OpenAI-specific parameter that the SDK does not model natively by calling `->providerOptions('openai', [...])` on any fluent request builder. These options are merged directly into the outgoing request body.
+
+<CodeGroup>
+
+```php Logprobs
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+$result = Generate::text('Name three planets.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->providerOptions('openai', [
+        'logprobs'       => true,
+        'top_logprobs'   => 3,
+    ])
+    ->run();
+```
+
+```php Seed & user
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+$result = Generate::text('Write a haiku.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->providerOptions('openai', [
+        'seed' => 42,
+        'user' => 'user_abc123',
+    ])
+    ->run();
+```
+
+```php Raw escape hatch
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+
+// The 'raw' sub-key is applied last and overwrites any conflicting key.
+$result = Generate::text('Summarize this document.')
+    ->model(OpenAI::model('gpt-4o'))
+    ->providerOptions('openai', [
+        'raw' => ['store' => true],
+    ])
+    ->run();
+```
+
+</CodeGroup>
+
+---
+
+## Live sessions (Realtime API)
+
+The OpenAI Realtime API enables low-latency, two-way audio conversations via WebSocket (`wss://api.openai.com/v1/realtime`). You can also use WebRTC for browser-side sessions where the browser connects directly to OpenAI with a short-lived ephemeral key.
+
+<Accordion title="WebSocket voice session">
+
+```php
+use AiSdk\Live;
+use AiSdk\OpenAI;
+use AiSdk\Live\LiveOperation;
+
+OpenAI::create();
+
+$session = Live::voice()
+    ->model(OpenAI::model('gpt-4o-realtime-preview'))
+    ->connect($yourWebSocketTransport);
+
+foreach ($session->events() as $event) {
+    // handle AudioDelta, TextDelta, TranscriptDelta, ToolCallEvent, etc.
+}
+```
+
+</Accordion>
+
+<Accordion title="WebRTC ephemeral key">
+
+Generate a short-lived client secret that you send to the browser. The browser then connects directly to OpenAI's WebRTC endpoint using that secret.
+
+```php
+use AiSdk\Live;
+use AiSdk\OpenAI;
+use AiSdk\Live\LiveRequest;
+use AiSdk\Live\LiveOperation;
+
+OpenAI::create();
+
+$request = LiveRequest::make(operation: LiveOperation::Voice);
+$secret  = OpenAI::model('gpt-4o-realtime-preview')
+    ->clientSecret($request);
+
+// Send $secret->value to the browser. It expires at $secret->expiresAt.
+```
+
+</Accordion>
+
+<Accordion title="Live transcription">
+
+```php
+use AiSdk\Live;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$session = Live::transcription()
+    ->model(OpenAI::model('gpt-4o-mini-transcribe'))
+    ->connect($yourWebSocketTransport);
+```
+
+</Accordion>
+
+<Accordion title="Live translation">
+
+```php
+use AiSdk\Live;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+$session = Live::translation()
+    ->model(OpenAI::model('gpt-4o-mini-realtime-preview'))
+    ->providerOptions('openai', ['to' => 'en'])
+    ->connect($yourWebSocketTransport);
+```
+
+</Accordion>
+
+See the [Live overview](/live/overview) and [transports](/live/transports) guides for the full API.
+
+---
+
+## Webhook verification
+
+OpenAI uses the [Standard Webhooks](https://www.standardwebhooks.com/) scheme. The SDK verifies the HMAC-SHA256 signature, enforces a five-minute replay window, and returns the decoded event array.
+
+```php
+use AiSdk\OpenAI;
+
+// In your webhook controller / handler:
+$payload       = file_get_contents('php://input');
+$headers       = getallheaders();         // array<string, string>
+$signingSecret = 'whsec_...';             // from your OpenAI dashboard
+
+$event = OpenAI::verifyWebhook($payload, $headers, $signingSecret);
+
+// $event is the decoded JSON array, e.g. ['type' => 'response.completed', ...]
+```
+
+<Warning>
+  Always pass the **raw request body** as `$payload`. Parsing and re-encoding the JSON before calling `verifyWebhook()` changes the signed bytes and causes verification to fail.
+</Warning>
+
+The verifier normalizes header names to lowercase, so passing the raw `getallheaders()` output or a PSR-7 `$request->getHeaders()` array both work correctly. It accepts both the full `whsec_<base64>` format and a bare base64 string as the signing secret.
+
+<Accordion title="What the verifier checks">
+
+1. **Header presence** — `webhook-id`, `webhook-timestamp`, and `webhook-signature` must all be present.
+2. **Timestamp window** — The timestamp must be within ±300 seconds of the current server time.
+3. **HMAC signature** — The expected signature is `base64(HMAC-SHA256(id + "." + timestamp + "." + payload, secret))`. At least one of the space-delimited `v1,<value>` tokens in `webhook-signature` must match.
+4. **JSON validity** — The verified payload must decode to a JSON object.
+
+</Accordion>

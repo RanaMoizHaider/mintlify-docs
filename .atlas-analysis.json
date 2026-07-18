@@ -1,0 +1,123 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "PHP AI SDK",
+  "projectDescription": "A framework-agnostic PHP 8.3+ SDK for integrating AI capabilities — text, image, speech, transcription, embeddings, video, and real-time sessions — through a unified fluent API with first-class support for OpenAI, Anthropic, and any OpenAI-compatible provider.",
+  "theme": "luma",
+  "primaryColor": "#6ba8dc",
+  "lightColor": "#0f1017",
+  "darkColor": "#d4d4d6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/providers",
+              "concepts/models",
+              "concepts/messages",
+              "concepts/streaming",
+              "concepts/tools",
+              "concepts/structured-output"
+            ]
+          },
+          {
+            "group": "Generating Content",
+            "pages": [
+              "generating/text",
+              "generating/images",
+              "generating/speech",
+              "generating/transcription",
+              "generating/embeddings",
+              "generating/video"
+            ]
+          },
+          {
+            "group": "Real-Time (Live)",
+            "pages": [
+              "live/overview",
+              "live/voice",
+              "live/transcription",
+              "live/translation",
+              "live/transports"
+            ]
+          },
+          {
+            "group": "Providers",
+            "pages": [
+              "providers/openai",
+              "providers/anthropic",
+              "providers/openai-compatible"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/sdk-configuration",
+              "advanced/reasoning",
+              "advanced/provider-options",
+              "advanced/error-handling",
+              "advanced/testing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Unified fluent API for text, image, speech, transcription, embeddings, and video generation",
+    "Streaming support with token-by-token callbacks and structured stream events",
+    "Agentic tool calling with automatic multi-step execution loops",
+    "Structured output with JSON Schema validation via Output and Schema builders",
+    "Real-time voice, transcription, and translation sessions over WebSocket and HTTP/2",
+    "First-class OpenAI and Anthropic providers plus any OpenAI-compatible endpoint",
+    "Extended reasoning (chain-of-thought) support across supported models",
+    "PSR-18 / PSR-7 compatible, framework-agnostic, works in Laravel, Symfony, or plain PHP",
+    "Testing fakes for all modalities — no HTTP mocking required",
+    "Multimodal inputs: text, images, audio, video, and files"
+  ],
+  "publicApiSurface": [
+    "Generate::text()",
+    "Generate::image()",
+    "Generate::speech()",
+    "Generate::transcription()",
+    "Generate::embedding()",
+    "Generate::video()",
+    "Generate::videoJob()",
+    "Generate::model(Model $model)",
+    "Generate::configure(Sdk $sdk)",
+    "Live::voice()",
+    "Live::transcribe()",
+    "Live::translate()",
+    "Schema::string() / ::integer() / ::number() / ::boolean() / ::array() / ::enum() / ::object()",
+    "Tool::make()",
+    "Message::system() / ::user() / ::assistant() / ::tool()",
+    "Content::text() / ::image() / ::audio() / ::video() / ::file()",
+    "Output::enum() / ::schema()",
+    "Reasoning::effort() / ::budget()",
+    "ToolChoice::auto() / ::none() / ::required() / ::tool()",
+    "SdkFactory (fluent builder for Sdk runtime)",
+    "OpenAI::create() / ::model()",
+    "Anthropic::create() / ::model()",
+    "Transport::auto() / ::webSocket() / ::http2()",
+    "OpenAI::verifyWebhook()",
+    "PendingTextRequest: prompt(), instructions(), messages(), temperature(), maxTokens(), topP(), maxSteps(), tools(), toolChoice(), reasoning(), stream(), run()",
+    "PendingImageRequest: prompt(), count(), size(), aspectRatio(), seed(), run()",
+    "PendingSpeechRequest: input(), voice(), format(), run()",
+    "PendingTranscriptionRequest: audio(), run()",
+    "PendingEmbeddingRequest: input(), dimensions(), run()",
+    "PendingVideoRequest: prompt(), image(), video(), output(), run(), job()",
+    "Stream: parts(), chunks(), run(), result(), onChunk(), onToolCall(), onFinish(), onError()",
+    "TextResult, ImageResult, AudioResult, TranscriptResult, EmbeddingResult, VideoResult",
+    "FakeTextModel, FakeImageModel, FakeSpeechModel, FakeTranscriptionModel, FakeEmbeddingModel, FakeVideoModel"
+  ]
+}

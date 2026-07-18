@@ -1,0 +1,229 @@
+---
+title: "Generating Float Vector Embeddings with PHP AI SDK"
+sidebarTitle: "Embeddings"
+description: "Use Generate::embedding() to turn text into dense float vectors for semantic search, clustering, and similarity scoring with any embedding model."
+---
+
+`Generate::embedding()` converts one or more text strings into high-dimensional float vectors using any provider that implements `EmbeddingModelInterface`. The resulting `EmbeddingResult` gives you the vector for each input so you can store it in a vector database, compute cosine similarity, or build semantic search pipelines — all without touching a raw HTTP client.
+
+## Basic usage
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::embedding('PHP is a popular server-side scripting language.')
+    ->run();
+
+// Access the float vector
+$vector = $result->output->vector;
+echo "Dimensions: {$result->output->dimensions}\n";
+```
+
+## Builder methods
+
+<AccordionGroup>
+  <Accordion title="input(string|array $input)">
+    Sets the text to embed. Pass a single string for one embedding or an array of strings for a batch. Each string must be non-empty; passing an empty string or an associative array throws `InvalidArgumentException`.
+
+    ```php
+    // Single input
+    Generate::embedding('A sentence about PHP')->run();
+
+    // Batch input
+    Generate::embedding(['First document', 'Second document'])->run();
+    ```
+
+    You can also pass the input directly as the first argument to `Generate::embedding()`:
+
+    ```php
+    $result = Generate::embedding('Hello world')->run();
+    ```
+  </Accordion>
+
+  <Accordion title="dimensions(int $dimensions)">
+    Requests a specific vector dimensionality. Some providers (such as OpenAI `text-embedding-3-*` models) support variable dimensions; others ignore this setting and always return their native size. The value must be at least `1`.
+
+    ```php
+    Generate::embedding('Compact representation')
+        ->dimensions(256)
+        ->run();
+    ```
+
+    <Note>
+      When you reduce dimensions with a model that supports it, the truncated vector remains valid for cosine similarity comparisons — you just trade recall accuracy for storage efficiency.
+    </Note>
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default embedding model for this request.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::embedding('The quick brown fox')
+        ->model(ProviderModel::openai('text-embedding-3-large'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific parameters not natively exposed by the SDK. Options are namespaced by provider name.
+
+    ```php
+    Generate::embedding('Query text')
+        ->providerOptions('openai', ['encoding_format' => 'base64'])
+        ->run();
+
+    // Cohere example: specify the input type
+    Generate::embedding('Search query')
+        ->providerOptions('cohere', ['input_type' => 'search_query'])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## The EmbeddingResult object
+
+`run()` returns an `EmbeddingResult` with these read-only fields:
+
+<ResponseField name="output" type="EmbeddingData" required>
+  The first (or only) embedding. A convenience alias for `$result->embeddings[0]`.
+</ResponseField>
+
+<ResponseField name="embeddings" type="EmbeddingData[]" required>
+  All embeddings, one per input string. When you pass an array of four strings, this array contains four `EmbeddingData` objects in the same order.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Token consumption for the request. Contains `inputTokens` (the total number of tokens across all inputs) and `outputTokens`.
+</ResponseField>
+
+## The EmbeddingData object
+
+Each element in `$result->embeddings` is an `EmbeddingData` instance:
+
+<ResponseField name="vector" type="float[]" required>
+  The dense float vector. Index positions correspond to embedding dimensions.
+</ResponseField>
+
+<ResponseField name="index" type="int|null">
+  The zero-based position of this embedding in the original batch, as reported by the provider. Useful for reordering when responses arrive out of order.
+</ResponseField>
+
+<ResponseField name="dimensions" type="int">
+  The number of dimensions in this vector. Computed automatically as `count($vector)`.
+</ResponseField>
+
+## Batch embedding
+
+Embed multiple documents in a single API call to minimise latency and reduce costs:
+
+```php
+use AiSdk\Generate;
+
+$documents = [
+    'PHP 8.4 introduced property hooks.',
+    'Fibers enable cooperative multitasking in PHP.',
+    'The match expression is type-safe.',
+    'Named arguments improve call-site readability.',
+];
+
+$result = Generate::embedding($documents)
+    ->dimensions(512)
+    ->run();
+
+echo "Embedded " . count($result->embeddings) . " documents\n";
+
+foreach ($result->embeddings as $embedding) {
+    echo "  [{$embedding->index}] {$embedding->dimensions} dimensions\n";
+}
+```
+
+## Storing embeddings
+
+After generating vectors, store them alongside your data for later retrieval:
+
+```php
+use AiSdk\Generate;
+
+$articles = fetchArticlesFromDatabase();
+
+foreach ($articles as $article) {
+    $result = Generate::embedding($article['content'])->run();
+
+    storeEmbedding(
+        id:     $article['id'],
+        vector: $result->output->vector,
+    );
+}
+```
+
+## Cosine similarity
+
+Cosine similarity measures how aligned two vectors are regardless of their magnitude. Use it to find the most semantically similar document to a query.
+
+```php
+use AiSdk\Generate;
+
+/**
+ * Compute cosine similarity between two float vectors.
+ *
+ * @param  float[]  $a
+ * @param  float[]  $b
+ */
+function cosineSimilarity(array $a, array $b): float
+{
+    $dot   = array_sum(array_map(fn($x, $y) => $x * $y, $a, $b));
+    $normA = sqrt(array_sum(array_map(fn($x) => $x ** 2, $a)));
+    $normB = sqrt(array_sum(array_map(fn($x) => $x ** 2, $b)));
+
+    return ($normA * $normB) > 0.0 ? $dot / ($normA * $normB) : 0.0;
+}
+
+// Embed the user's search query
+$queryResult = Generate::embedding('How do I handle errors in PHP?')->run();
+$queryVector = $queryResult->output->vector;
+
+// Embed a set of candidate documents
+$candidates = [
+    'PHP exception handling with try/catch blocks',
+    'Installing Composer on Ubuntu',
+    'Understanding PHP error levels and set_error_handler',
+    'Object-oriented programming patterns in PHP 8',
+];
+
+$candidateResult = Generate::embedding($candidates)->run();
+
+// Rank by similarity
+$scores = [];
+foreach ($candidateResult->embeddings as $embedding) {
+    $scores[$embedding->index] = cosineSimilarity($queryVector, $embedding->vector);
+}
+
+arsort($scores);
+
+echo "Most relevant documents:\n";
+foreach ($scores as $index => $score) {
+    $pct = number_format($score * 100, 1);
+    echo "  [{$pct}%] {$candidates[$index]}\n";
+}
+```
+
+<Tip>
+  For production semantic search, store vectors in a dedicated vector database such as pgvector (PostgreSQL extension), Qdrant, or Pinecone. These systems implement approximate nearest-neighbour search far more efficiently than a PHP loop over stored vectors.
+</Tip>
+
+## Tracking token usage
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::embedding([
+    'First paragraph of the document.',
+    'Second paragraph of the document.',
+])->run();
+
+echo "Input tokens:  {$result->usage->inputTokens}\n";
+echo "Output tokens: {$result->usage->outputTokens}\n";
+echo "Total tokens:  {$result->usage->totalTokens}\n";
+```

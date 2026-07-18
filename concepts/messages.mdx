@@ -1,0 +1,214 @@
+---
+title: "Messages: Building Conversations and Multimodal Input"
+sidebarTitle: "Messages"
+description: "Learn how to construct single-turn prompts and multi-turn conversations using the Message and Content classes, including images, audio, video, and files."
+---
+
+Every request to a text model is ultimately a list of messages, each with a role and one or more content parts. The `Message` class gives you a concise, type-safe API for building that list — from a simple single-turn prompt right through to a multi-turn conversation that includes tool results and multimodal attachments.
+
+## Message roles
+
+The SDK defines four roles, each with a dedicated factory method:
+
+<CardGroup cols={2}>
+  <Card title="Message::system()" icon="gear">
+    Sets persistent instructions that shape every subsequent response. Send it as the first message in the list.
+  </Card>
+  <Card title="Message::user()" icon="user">
+    Represents input from the human side of the conversation. Accepts a plain string or an array of `Content` parts for multimodal messages.
+  </Card>
+  <Card title="Message::assistant()" icon="robot">
+    Represents a previous model response. Use it when replaying history in a multi-turn conversation. Optionally carries tool calls.
+  </Card>
+  <Card title="Message::tool()" icon="wrench">
+    Carries the result of a tool execution back to the model. Links to the originating tool call via `toolCallId`.
+  </Card>
+</CardGroup>
+
+```php
+use AiSdk\Message;
+
+// Single-turn prompt — the simplest case.
+$messages = [
+    Message::system('You are a concise assistant. Reply in one sentence.'),
+    Message::user('What is the capital of France?'),
+];
+
+// Multi-turn conversation with assistant history.
+$messages = [
+    Message::system('You are a helpful assistant.'),
+    Message::user('Name three PHP frameworks.'),
+    Message::assistant('Laravel, Symfony, and CodeIgniter.'),
+    Message::user('Tell me more about Laravel.'),
+];
+```
+
+## Building multi-turn conversations
+
+Pass the `->messages()` method an array of `Message` objects. The SDK forwards them to the provider in order — no manipulation, no hidden injection.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Message;
+use AiSdk\OpenAI;
+
+OpenAI::create();
+
+// First turn.
+$history = [
+    Message::system('You are a PHP tutor.'),
+    Message::user('What does the spread operator do in PHP?'),
+];
+
+$first = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->messages($history)
+    ->run();
+
+echo $first->text; // "The spread operator (...) unpacks..."
+
+// Second turn — append the assistant reply and the new question.
+$history[] = Message::assistant($first->text);
+$history[] = Message::user('Give me a short code example.');
+
+$second = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->messages($history)
+    ->run();
+
+echo $second->text;
+```
+
+<Note>
+  The SDK does **not** maintain a session or automatic history. You are responsible for appending the assistant's reply to your `$history` array before the next turn.
+</Note>
+
+## The Content class
+
+`Content` represents a single typed part within a message. You use it whenever a message carries more than plain text — an image alongside a question, an audio clip to transcribe, or a PDF to analyse.
+
+### Text content
+
+```php
+use AiSdk\Content;
+use AiSdk\Message;
+
+// These two are equivalent for simple text.
+Message::user('Describe this image.');
+Message::user([Content::text('Describe this image.')]);
+```
+
+### Image content
+
+```php
+use AiSdk\Content;
+use AiSdk\InputEncoding;
+use AiSdk\Message;
+
+// From a public URL (auto-detected).
+$fromUrl = Content::image('https://example.com/photo.jpg');
+
+// From a local file path (MIME type detected automatically via mime_content_type).
+$fromFile = Content::image('/var/www/uploads/chart.png');
+
+// From a base64 string (MIME type is required).
+$fromBase64 = Content::image(
+    base64_encode(file_get_contents('/path/to/image.png')),
+    mimeType: 'image/png',
+    encoding: InputEncoding::Base64,
+);
+
+// From a data URI (MIME type extracted automatically).
+$fromDataUri = Content::image('data:image/webp;base64,UklGR...');
+
+// Combine text and image in one user message.
+$message = Message::user([
+    Content::text('What is wrong with this chart?'),
+    $fromUrl,
+]);
+```
+
+### Audio, video, and file content
+
+`Content::audio()`, `Content::video()`, and `Content::file()` accept the same source types as `Content::image()` — URL, file path, base64, or data URI.
+
+```php
+use AiSdk\Content;
+use AiSdk\InputEncoding;
+use AiSdk\Message;
+
+// Audio from a URL.
+$audio = Content::audio('https://example.com/meeting.mp3');
+
+// Audio from a local file.
+$audioFile = Content::audio('/recordings/interview.wav');
+
+// Video from a URL.
+$video = Content::video('https://example.com/demo.mp4');
+
+// PDF or other file attachment.
+$pdf = Content::file('/docs/report.pdf', mimeType: 'application/pdf');
+
+// A multimodal message with multiple parts.
+$message = Message::user([
+    Content::text('Summarise the attached report.'),
+    $pdf,
+]);
+```
+
+## Content source resolution
+
+The SDK automatically determines how to treat the string you pass to `Content::image()` / `Content::audio()` / `Content::video()` / `Content::file()`:
+
+<Steps>
+  <Step title="HTTP/HTTPS URL">
+    If the string passes `FILTER_VALIDATE_URL` and the scheme is `http` or `https`, it is stored as a `url` source and sent to the provider as a remote reference.
+  </Step>
+  <Step title="Data URI">
+    If the string starts with `data:`, it is stored as a `data_uri` source. The MIME type is extracted from the URI prefix unless you supply one explicitly.
+  </Step>
+  <Step title="Base64 string">
+    If you pass `InputEncoding::Base64` as the `$encoding` argument, the string is stored as-is as `base64`. You **must** supply a `$mimeType` in this case.
+  </Step>
+  <Step title="Readable file path">
+    If the string resolves to a readable file on disk, the SDK reads the file, detects the MIME type via `mime_content_type()`, and stores the raw bytes.
+  </Step>
+  <Step title="Raw bytes">
+    Anything else is treated as raw binary content. You **must** supply a `$mimeType`.
+  </Step>
+</Steps>
+
+## Tool messages in a conversation
+
+When you use tools and replay the full conversation history yourself, you include `Message::tool()` entries to carry each tool's result back to the model.
+
+```php
+use AiSdk\Message;
+
+// After the model responds with a tool call:
+$history[] = Message::assistant(
+    content: '',
+    toolCalls: $result->toolCalls,
+);
+
+// After you execute the tool:
+foreach ($result->toolCalls as $call) {
+    $output = myTool($call->arguments);
+
+    $history[] = Message::tool(
+        toolCallId: $call->id,
+        output: json_encode($output),
+        name: $call->name,
+    );
+}
+
+// Continue the conversation.
+$next = Generate::text()
+    ->model(OpenAI::model('gpt-4o'))
+    ->messages($history)
+    ->run();
+```
+
+<Tip>
+  When you use the SDK's automatic tool loop via `->maxSteps()`, you don't need to manage tool messages manually — the SDK handles that bookkeeping for you.
+</Tip>

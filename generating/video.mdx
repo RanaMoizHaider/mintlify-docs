@@ -1,0 +1,393 @@
+---
+title: "Generating AI Video Clips Sync or Async in PHP SDK"
+sidebarTitle: "Video"
+description: "Use Generate::video() to wait for video generation to complete, or Generate::videoJob() to submit a job and poll its status asynchronously."
+---
+
+Video generation is inherently slow — most providers take anywhere from a few seconds to several minutes to render a clip. The SDK gives you two complementary approaches: `Generate::video()->run()` blocks until the video is ready and returns a `VideoResult` directly, while `Generate::video()->job()` returns a `VideoJob` immediately so you can poll status in a background process or queue worker. Both approaches use the same `PendingVideoRequest` builder.
+
+## Synchronous generation
+
+Use `run()` when you want the SDK to handle polling automatically. It submits the job, polls the provider on an interval, and returns a `VideoResult` once the job succeeds or throws on failure.
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::video('A PHP elephant logo animating across a dark background')
+    ->aspectRatio('16:9')
+    ->duration(5.0)
+    ->run(timeout: 300, pollIntervalMs: 2000);
+
+echo $result->output->url;
+```
+
+<Note>
+  `run()` blocks the PHP process for the duration of the poll loop. Use it in scripts, CLI commands, or short-lived HTTP requests where a synchronous wait is acceptable. For web requests, prefer the async `job()` approach described below.
+</Note>
+
+## Asynchronous job submission
+
+Use `job()` (or the alias `async()`) to submit the generation request and receive a `VideoJob` immediately without waiting for it to finish. Store the job ID and poll later — in a queue worker, a cron task, or a webhook handler.
+
+```php
+use AiSdk\Generate;
+
+// Submit the job and return immediately
+$job = Generate::video('A timelapse of a PHP codebase being written')
+    ->aspectRatio('9:16')
+    ->duration(8.0)
+    ->fps(24)
+    ->job();
+
+echo "Job ID: {$job->id}\n";
+echo "Status: {$job->status->value}\n";
+
+// Persist the job ID so you can poll it later
+saveJobId($job->id);
+```
+
+## Builder methods
+
+<AccordionGroup>
+  <Accordion title="prompt(string $prompt)">
+    Describes the video you want to generate. A non-empty prompt is required; `run()` and `job()` both throw `InvalidArgumentException` when the prompt is empty or whitespace.
+
+    ```php
+    Generate::video('A slow-motion waterfall in a PHP-themed jungle')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="image(Content $image)">
+    Provides a reference image to guide generation (image-to-video). Wrap the image in `Content::image()`.
+
+    ```php
+    use AiSdk\Content;
+
+    Generate::video('Animate this scene with swirling clouds')
+        ->image(Content::image('/path/to/frame.png'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="video(Content $video)">
+    Provides a reference or seed video for video-to-video generation. Wrap the file in `Content::video()`.
+
+    ```php
+    use AiSdk\Content;
+
+    Generate::video('Extend this clip with a smooth outro')
+        ->video(Content::video('/path/to/source.mp4'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="aspectRatio(string $aspectRatio)">
+    Sets the output aspect ratio using the `{width}:{height}` format, for example `'16:9'` or `'9:16'`. The SDK validates the format and throws `InvalidArgumentException` for malformed strings.
+
+    ```php
+    Generate::video('Aerial view of a PHP conference')->aspectRatio('21:9')->run();
+    ```
+  </Accordion>
+
+  <Accordion title="resolution(string $resolution)">
+    Sets the pixel resolution of the output, for example `'1920x1080'` or `'720p'`. The accepted values vary by provider.
+
+    ```php
+    Generate::video('Explainer animation')->resolution('1280x720')->run();
+    ```
+  </Accordion>
+
+  <Accordion title="duration(float $seconds)">
+    Sets the desired clip length in seconds. The value must be greater than zero.
+
+    ```php
+    Generate::video('Product reveal animation')->duration(10.0)->run();
+    ```
+  </Accordion>
+
+  <Accordion title="fps(int $fps)">
+    Sets the output frame rate. The value must be at least `1`.
+
+    ```php
+    Generate::video('Smooth motion demo')->fps(60)->run();
+    ```
+  </Accordion>
+
+  <Accordion title="seed(int $seed)">
+    Pins the random seed for reproducible results when you want to regenerate the same clip.
+
+    ```php
+    Generate::video('Abstract particle effect')->seed(1337)->run();
+    ```
+  </Accordion>
+
+  <Accordion title="output(VideoOutputOptions|array $options)">
+    Applies a `VideoOutputOptions` value object or an associative array of the same keys to set multiple output parameters at once.
+
+    ```php
+    use AiSdk\Requests\VideoOutputOptions;
+
+    $options = new VideoOutputOptions(
+        aspectRatio: '16:9',
+        resolution:  '1920x1080',
+        duration:    6.0,
+        fps:         30,
+        seed:        42,
+    );
+
+    Generate::video('A PHP logo reveal')
+        ->output($options)
+        ->run();
+
+    // Equivalent with an array:
+    Generate::video('A PHP logo reveal')
+        ->output([
+            'aspectRatio' => '16:9',
+            'resolution'  => '1920x1080',
+            'duration'    => 6.0,
+            'fps'         => 30,
+            'seed'        => 42,
+        ])
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default video model for this request.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::video('Cinematic drone shot')
+        ->model(ProviderModel::runway('gen4-turbo'))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific parameters the SDK does not natively model. Options are namespaced by provider name.
+
+    ```php
+    Generate::video('Stylised animation')
+        ->providerOptions('runway', ['style_preset' => 'cinematic'])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## run() vs job()
+
+| | `run()` | `job()` |
+|---|---|---|
+| **Returns** | `VideoResult` | `VideoJob` |
+| **Blocks** | Yes — polls until done | No — returns immediately |
+| **Best for** | CLI scripts, short tasks | Web requests, queue workers |
+| **Timeout control** | `$timeout` param (seconds) | You control the poll loop |
+
+## The VideoJob object
+
+`job()` returns a `VideoJob` with these read-only fields:
+
+<ResponseField name="id" type="string" required>
+  The provider-assigned job identifier. Store this to poll or retrieve the job later.
+</ResponseField>
+
+<ResponseField name="provider" type="string" required>
+  The provider string, for example `'runway'` or `'luma'`.
+</ResponseField>
+
+<ResponseField name="modelId" type="string" required>
+  The model identifier used for this job.
+</ResponseField>
+
+<ResponseField name="status" type="VideoJobStatus" required>
+  The current job status as a `VideoJobStatus` enum value.
+</ResponseField>
+
+<ResponseField name="result" type="VideoData|null">
+  The finished video wrapped in a `VideoData` object. `null` until the job reaches `Succeeded` status.
+</ResponseField>
+
+<ResponseField name="errorMessage" type="string|null">
+  A human-readable error message when the job reaches `Failed`, `Canceled`, or `Expired` status.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Compute or token consumption reported by the provider.
+</ResponseField>
+
+## VideoJobStatus values
+
+<ResponseField name="Queued" type="VideoJobStatus::Queued">
+  The job has been accepted by the provider and is waiting to start.
+</ResponseField>
+
+<ResponseField name="Running" type="VideoJobStatus::Running">
+  The provider is actively rendering the video.
+</ResponseField>
+
+<ResponseField name="Succeeded" type="VideoJobStatus::Succeeded">
+  Rendering completed successfully. `$job->result` is now populated.
+</ResponseField>
+
+<ResponseField name="Failed" type="VideoJobStatus::Failed">
+  Rendering failed. Check `$job->errorMessage` for details.
+</ResponseField>
+
+<ResponseField name="Canceled" type="VideoJobStatus::Canceled">
+  The job was canceled before completion.
+</ResponseField>
+
+<ResponseField name="Expired" type="VideoJobStatus::Expired">
+  The job exceeded the provider's maximum queue time.
+</ResponseField>
+
+## The VideoResult and VideoData objects
+
+`run()` returns a `VideoResult`:
+
+<ResponseField name="output" type="VideoData" required>
+  The generated video.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Compute consumption for the completed job.
+</ResponseField>
+
+`VideoResult::$output` is a `VideoData` instance:
+
+<ResponseField name="url" type="string|null">
+  A URL pointing to the generated video file. Most providers return a signed CDN URL.
+</ResponseField>
+
+<ResponseField name="data" type="string|null">
+  Raw binary video bytes when the provider returns the file inline. `null` when only a URL is provided.
+</ResponseField>
+
+<ResponseField name="mimeType" type="string">
+  The MIME type of the output file, for example `'video/mp4'`. Defaults to `'video/mp4'`.
+</ResponseField>
+
+<ResponseField name="duration" type="float|null">
+  Actual rendered duration in seconds. May differ slightly from the requested duration.
+</ResponseField>
+
+<ResponseField name="resolution" type="string|null">
+  The actual pixel resolution of the output, for example `'1920x1080'`.
+</ResponseField>
+
+### VideoData methods
+
+<ParamField body="save(string $path)" type="string">
+  Writes `$data` (raw binary) to `$path` and returns `$path`. Throws `VideoDataException` when `data` is `null` (URL-only response) or the file cannot be written. Download from `url` first when you need to persist a URL-based video.
+</ParamField>
+
+## Saving a generated video
+
+```php
+use AiSdk\Generate;
+
+$result = Generate::video('A PHP logo morphing into a rocket')
+    ->aspectRatio('16:9')
+    ->duration(6.0)
+    ->run(timeout: 300, pollIntervalMs: 3000);
+
+$video = $result->output;
+
+echo "URL:        {$video->url}\n";
+echo "Duration:   {$video->duration}s\n";
+echo "Resolution: {$video->resolution}\n";
+
+// Save inline binary data if provided
+if ($video->data !== null) {
+    $video->save('/var/www/public/videos/generated.mp4');
+    echo "Saved to disk.\n";
+}
+```
+
+## Building an async job pipeline
+
+Use `job()` to submit the request from a web controller and poll from a separate worker:
+
+<Steps>
+  <Step title="Submit the job">
+    ```php
+    // In your HTTP controller
+    use AiSdk\Generate;
+
+    $job = Generate::video($request->input('prompt'))
+        ->aspectRatio('16:9')
+        ->duration((float) $request->input('duration', 5))
+        ->job();
+
+    // Persist job ID for later polling
+    DB::table('video_jobs')->insert([
+        'job_id'     => $job->id,
+        'provider'   => $job->provider,
+        'model_id'   => $job->modelId,
+        'status'     => $job->status->value,
+        'created_at' => now(),
+    ]);
+
+    return response()->json(['jobId' => $job->id]);
+    ```
+  </Step>
+
+  <Step title="Poll from a queue worker">
+    ```php
+    // In your queue job or cron task
+    use AiSdk\Generate;
+    use AiSdk\Responses\VideoJobStatus;
+
+    $record = DB::table('video_jobs')->where('job_id', $jobId)->first();
+
+    // Retrieve the model and poll the job
+    $job = pollVideoJob($record->provider, $record->model_id, $record->job_id);
+
+    DB::table('video_jobs')->where('job_id', $jobId)->update([
+        'status'     => $job->status->value,
+        'video_url'  => $job->result?->url,
+        'updated_at' => now(),
+    ]);
+
+    if ($job->status === VideoJobStatus::Succeeded) {
+        echo "Video ready: {$job->result->url}\n";
+    } elseif ($job->status === VideoJobStatus::Failed) {
+        echo "Video failed: {$job->errorMessage}\n";
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Video generation jobs can fail with `Failed`, `Canceled`, or `Expired` statuses. Always check `$job->status` before accessing `$job->result`. The SDK's `run()` method throws `VideoException` on terminal failures; when polling manually you are responsible for error handling.
+</Warning>
+
+## VideoOutputOptions reference
+
+`VideoOutputOptions` is a simple value object you can construct once and reuse:
+
+<ParamField body="aspectRatio" type="string|null">
+  Output aspect ratio in `{width}:{height}` format, e.g. `'16:9'`.
+</ParamField>
+
+<ParamField body="resolution" type="string|null">
+  Output resolution, e.g. `'1920x1080'` or `'720p'`.
+</ParamField>
+
+<ParamField body="duration" type="float|null">
+  Desired clip length in seconds.
+</ParamField>
+
+<ParamField body="fps" type="int|null">
+  Output frame rate in frames per second.
+</ParamField>
+
+<ParamField body="seed" type="int|null">
+  Random seed for reproducible generation.
+</ParamField>
+
+<ParamField body="extra" type="array">
+  Provider-specific extra fields passed through verbatim.
+</ParamField>

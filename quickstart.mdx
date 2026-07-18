@@ -1,47 +1,204 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with the PHP AI SDK in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Install aisdk/core and aisdk/openai, set your API key, and generate text, stream responses, and call tools — all in under five minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through installing the PHP AI SDK, configuring an OpenAI provider, and running three increasingly powerful examples: plain text generation, streaming, and tool calling. By the end you will have working code you can adapt to your own application.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Install the packages">
+    Add `aisdk/core` and the OpenAI provider to your project. The `aisdk/openai` package depends on `aisdk/openai-compatible` and `aisdk/core`, so a single command installs everything you need for OpenAI.
 
     ```bash
-    npm install your-package
+    composer require aisdk/core aisdk/openai
     ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
-    ```
+    <Tip>
+      To use Anthropic's Claude models instead of or alongside OpenAI, also run `composer require aisdk/anthropic`. Both providers can be active in the same application.
+    </Tip>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+  <Step title="Set your API key">
+    The OpenAI provider reads your key from the `OPENAI_API_KEY` environment variable by default. Export it in your shell or add it to your `.env` file.
+
+    <CodeGroup>
+
+    ```bash Shell
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    ```ini .env
+    OPENAI_API_KEY=sk-...
+    ```
+
+    </CodeGroup>
+
+    <Warning>
+      Never commit your API key to version control. Add `.env` to your `.gitignore` and load it with a library such as `vlucas/phpdotenv` before calling any SDK methods.
+    </Warning>
+  </Step>
+
+  <Step title="Create the provider">
+    Call `OpenAI::create()` once — typically in a bootstrap file or service-container binding. The static facade stores the provider as the default instance, so subsequent calls to `OpenAI::model(...)` pick it up automatically.
+
+    ```php
+    <?php
+
+    use AiSdk\OpenAI;
+
+    // Reads OPENAI_API_KEY from the environment automatically.
+    OpenAI::create();
+
+    // Or pass config explicitly:
+    // OpenAI::create(['apiKey' => 'sk-...', 'baseUrl' => 'https://api.openai.com/v1']);
     ```
   </Step>
+
+  <Step title="Generate text">
+    Call `Generate::text()` with your prompt, chain a model, and call `->run()`. The SDK sends the request, normalizes the response, and returns a `TextResult`.
+
+    ```php
+    <?php
+
+    use AiSdk\Generate;
+    use AiSdk\OpenAI;
+
+    OpenAI::create();
+
+    $result = Generate::text('Explain what a PHP trait is in one sentence.')
+        ->model(OpenAI::model('gpt-4o-mini'))
+        ->run();
+
+    echo $result->text;
+    // → "A PHP trait is a mechanism for code reuse that lets you include
+    //    methods in multiple classes without using inheritance."
+    ```
+
+    The `TextResult` object exposes these properties:
+
+    | Property | Type | Description |
+    |---|---|---|
+    | `$result->text` | `string` | The final generated text |
+    | `$result->usage->inputTokens` | `int` | Tokens consumed by the prompt |
+    | `$result->usage->outputTokens` | `int` | Tokens consumed by the completion |
+    | `$result->finishReason` | `FinishReason` | Why the model stopped generating |
+    | `$result->providerMetadata` | `array` | Raw provider-specific fields |
+  </Step>
+
+  <Step title="Inspect the output">
+    Print the text or use any property on `TextResult` in your application logic.
+
+    ```php
+    <?php
+
+    use AiSdk\Generate;
+    use AiSdk\OpenAI;
+
+    OpenAI::create();
+
+    $result = Generate::text('What is the capital of France?')
+        ->model(OpenAI::model('gpt-4o-mini'))
+        ->run();
+
+    echo $result->text . PHP_EOL;
+    echo "Tokens used: {$result->usage->totalTokens}" . PHP_EOL;
+    ```
+
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Streaming responses
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+Replace `->run()` with `->stream()` to receive tokens as they are generated. Iterate the stream's `parts()` generator and check for `TextDeltaPart` to print each chunk immediately.
+
+```php
+<?php
+
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Streaming\TextDeltaPart;
+
+OpenAI::create();
+
+$stream = Generate::text('Write a two-sentence summary of the PHP language.')
+    ->model(OpenAI::model('gpt-4o-mini'))
+    ->stream();
+
+foreach ($stream->parts() as $part) {
+    if ($part instanceof TextDeltaPart) {
+        echo $part->text;
+        flush();
+    }
+}
+
+echo PHP_EOL;
+
+// After the loop, call $stream->result() for usage and finish reason.
+$result = $stream->result();
+echo "Total tokens: {$result->usage->totalTokens}" . PHP_EOL;
+```
+
+<Tip>
+  Use `$stream->chunks()` if you only need the raw text deltas and want to skip the part-type check. It returns a generator that yields only the `string` content of each `TextDeltaPart`.
 </Tip>
+
+## Tool calling
+
+Define a tool with `Tool::make()`, describe its input with a `Schema`, attach a handler with `->run()`, and pass the tool to `->tool()` on your request. The SDK manages the multi-step loop automatically.
+
+```php
+<?php
+
+use AiSdk\Generate;
+use AiSdk\OpenAI;
+use AiSdk\Schema;
+use AiSdk\Tool;
+
+OpenAI::create();
+
+$weatherTool = Tool::make('get_weather', 'Return the current weather for a city.')
+    ->input(
+        Schema::object(
+            name: 'get_weather_input',
+            properties: [
+                Schema::string('city', 'The city to get weather for.')->required(),
+                Schema::string('unit', 'Temperature unit: celsius or fahrenheit.'),
+            ],
+        )
+    )
+    ->run(function (array $input): string {
+        // Replace with a real weather API call.
+        $city = $input['city'];
+        $unit = $input['unit'] ?? 'celsius';
+        return "It is 22°{$unit[0]} and sunny in {$city}.";
+    });
+
+$result = Generate::text("What is the weather in Lahore?")
+    ->model(OpenAI::model('gpt-4o-mini'))
+    ->tool($weatherTool)
+    ->maxSteps(3)   // allow up to 3 model ↔ tool round-trips
+    ->run();
+
+echo $result->text . PHP_EOL;
+// → "The current weather in Lahore is 22°C and sunny."
+
+echo "Tool calls made: " . count($result->toolCalls) . PHP_EOL;
+```
+
+<Note>
+  Setting `->maxSteps(n)` controls how many model ↔ tool round-trips the SDK permits. The default is `1`, meaning the model can call tools but the loop stops after the first tool response. Increase this value when your task requires multiple tool invocations before the model can produce a final answer.
+</Note>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="package" href="/installation">
+    Detailed setup for all packages, environment variables, and programmatic configuration.
+  </Card>
+  <Card title="Providers" icon="plug" href="/providers">
+    Configure OpenAI, Anthropic, and custom OpenAI-compatible endpoints.
+  </Card>
+</CardGroup>

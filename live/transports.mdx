@@ -1,0 +1,307 @@
+---
+title: "Live API Transports — WebSocket, HTTP/2, and Custom"
+sidebarTitle: "Transports"
+description: "Configure WebSocket and HTTP/2 transports from aisdk/transport, or implement TransportInterface and TransportConnectionInterface for a custom connection."
+---
+
+Every Live session needs a transport — the layer responsible for opening a connection to the provider, sending frames, and receiving frames. The `aisdk/transport` package provides three ready-made implementations built on [amphp](https://amphp.org): `Transport::auto()`, `Transport::webSocket()`, and `Transport::http2()`. You pass one of these (or any object that implements `TransportInterface`) to `connect()` on any pending Live request. If none of the bundled options fit your environment, the core package's `TransportInterface` and `TransportConnectionInterface` contracts let you wire in anything from a mock transport for testing to a completely custom networking stack.
+
+## Installing the transport package
+
+```bash
+composer require aisdk/transport
+```
+
+The package depends on `amphp/websocket-client` and `amphp/http-client`, so both WebSocket and HTTP/2 support arrive in a single install.
+
+## Transport::auto()
+
+`Transport::auto()` is the simplest choice. It inspects the endpoint object the provider returns and delegates to `WebSocketTransport` for `WebSocketEndpoint` endpoints and to `Http2Transport` for `Http2Endpoint` endpoints. You do not need to know in advance which protocol a provider uses.
+
+```php
+use AiSdk\Live;
+use AiSdk\Transport;
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->connect(Transport::auto());
+```
+
+Internally, `AutoTransport` holds one `WebSocketTransport` and one `Http2Transport` instance and routes `connect()` calls based on the endpoint type:
+
+```php
+public function supports(TransportEndpoint $endpoint): bool
+{
+    return $endpoint instanceof WebSocketEndpoint || $endpoint instanceof Http2Endpoint;
+}
+```
+
+<Tip>
+Use `Transport::auto()` during development and switch to a specific transport only when you need to tune connection parameters for production.
+</Tip>
+
+## Transport::webSocket()
+
+`Transport::webSocket()` creates a `WebSocketTransport` backed by amphp's RFC 6455 client. All parameters are optional and have conservative defaults.
+
+```php
+use AiSdk\Transport;
+
+$transport = Transport::webSocket(
+    maximumMessageBytes: 16_777_216, // 16 MiB — maximum size of a single message
+    connectTimeout:       10,        // seconds before the TCP connection times out
+    tlsHandshakeTimeout:  10,        // seconds before the TLS handshake times out
+    maximumHeaderBytes:   16_384,    // 16 KiB — maximum size of HTTP upgrade headers
+);
+```
+
+### WebSocketTransport option reference
+
+<Accordion title="maximumMessageBytes (default: 16 MiB)">
+The largest WebSocket message the transport will accept. Messages larger than this limit cause a `TransportException` to be thrown. Increase this value if you are streaming high-bitrate audio and messages are being rejected.
+</Accordion>
+
+<Accordion title="connectTimeout (default: 10 s)">
+How long (in seconds) the transport waits for the TCP connection to be established before giving up with a `TransportException`.
+</Accordion>
+
+<Accordion title="tlsHandshakeTimeout (default: 10 s)">
+How long the transport waits for the TLS handshake to complete. On slow or geographically distant servers, you may need to increase this value.
+</Accordion>
+
+<Accordion title="maximumHeaderBytes (default: 16 KiB)">
+The maximum combined size of the HTTP upgrade response headers. Providers that attach large `Set-Cookie` or custom headers may require a higher value.
+</Accordion>
+
+You can also supply a custom `WebsocketConnector` as a fifth argument if you need to integrate with an existing amphp event loop or inject test doubles.
+
+## Transport::http2()
+
+`Transport::http2()` creates an `Http2Transport` backed by amphp's HTTP client. HTTP/2 transports are used for providers that deliver their Live API over a persistent HTTP/2 streaming request rather than a WebSocket upgrade.
+
+```php
+use AiSdk\Transport;
+
+$transport = Transport::http2(
+    requestBufferBytes:        65_536,    // 64 KiB upload buffer per request
+    connectTimeout:            10,        // seconds before TCP connection times out
+    tlsHandshakeTimeout:       10,        // seconds before TLS handshake times out
+    inactivityTimeout:         0,         // 0 = no inactivity timeout
+    transferTimeout:           0,         // 0 = no transfer timeout
+    maximumRequestChunkBytes:  16_777_216, // maximum size of a single outbound chunk
+);
+```
+
+### Http2Transport option reference
+
+<Accordion title="requestBufferBytes (default: 64 KiB)">
+The size of the in-memory buffer used to queue outbound audio frames before they are written to the HTTP/2 stream. Increase this value if you are sending large frames faster than the network can drain them.
+</Accordion>
+
+<Accordion title="connectTimeout (default: 10 s)">
+How long the transport waits for a TCP connection before throwing a `TransportException`.
+</Accordion>
+
+<Accordion title="tlsHandshakeTimeout (default: 10 s)">
+How long the transport waits for the TLS handshake to complete.
+</Accordion>
+
+<Accordion title="inactivityTimeout (default: 0 — disabled)">
+How long (in seconds) the transport tolerates no data flowing in either direction before closing the connection. Set to `0` to disable.
+</Accordion>
+
+<Accordion title="transferTimeout (default: 0 — disabled)">
+The overall maximum duration for a single streaming request, regardless of activity. Set to `0` for no limit, which is appropriate for long-running Live sessions.
+</Accordion>
+
+<Accordion title="maximumRequestChunkBytes (default: 16 MiB)">
+The maximum size of a single outbound chunk written to the HTTP/2 request body. Tune this to match your provider's chunk size expectations.
+</Accordion>
+
+You can inject a pre-configured `DelegateHttpClient` as the first argument — for example to share connection pools across your application or to replace the client in tests.
+
+## Implementing a custom transport
+
+If you cannot use the `aisdk/transport` package — perhaps because you are in an environment that does not support amphp, or you need to integrate with an existing WebSocket library — you can implement two interfaces from `aisdk/core`.
+
+### TransportInterface
+
+```php
+namespace AiSdk\Live\Contracts;
+
+interface TransportInterface
+{
+    public function supports(TransportEndpoint $endpoint): bool;
+    public function connect(TransportEndpoint $endpoint): TransportConnectionInterface;
+}
+```
+
+`supports()` returns `true` if your transport can handle the given endpoint type. `connect()` opens the connection and returns a `TransportConnectionInterface`.
+
+### TransportConnectionInterface
+
+```php
+namespace AiSdk\Live\Contracts;
+
+interface TransportConnectionInterface
+{
+    public function send(TransportFrame $frame): void;
+    public function receive(): ?TransportFrame;
+    public function finishSending(): void;
+    public function close(): void;
+    public function isClosed(): bool;
+}
+```
+
+`send()` writes a frame to the connection. `receive()` blocks until the next frame arrives and returns `null` when the connection is closed. `finishSending()` signals that you have finished writing (for half-close scenarios). `close()` terminates the connection immediately.
+
+`TransportFrame` carries a `TransportFrameType` (`Text` or `Binary`) and a string `$payload`. Use `TransportFrame::text($payload)` or `TransportFrame::binary($payload)` to construct frames.
+
+### AppWebSocketTransport — core-only example
+
+The `core` package ships a complete example at `examples/AppWebSocketTransport.php` that implements both interfaces using `amphp/websocket-client` directly, without depending on `aisdk/transport`. This is a useful starting point if you want to customise connection behaviour while keeping the amphp dependency.
+
+<CodeGroup>
+```php AppWebSocketTransport (TransportInterface)
+namespace App\Ai;
+
+use AiSdk\Exceptions\TransportException;
+use AiSdk\Live\Contracts\TransportConnectionInterface;
+use AiSdk\Live\Contracts\TransportInterface;
+use AiSdk\Live\TransportEndpoint;
+use AiSdk\Live\WebSocketEndpoint;
+use Amp\Websocket\Client\Rfc6455ConnectionFactory;
+use Amp\Websocket\Client\Rfc6455Connector;
+use Amp\Websocket\Client\WebsocketHandshake;
+use Amp\Websocket\Parser\Rfc6455ParserFactory;
+
+final readonly class AppWebSocketTransport implements TransportInterface
+{
+    public function __construct(private int $maximumMessageBytes = 16_777_216) {}
+
+    public function supports(TransportEndpoint $endpoint): bool
+    {
+        return $endpoint instanceof WebSocketEndpoint;
+    }
+
+    public function connect(TransportEndpoint $endpoint): TransportConnectionInterface
+    {
+        $headers = $endpoint->headers;
+        if ($endpoint->subprotocols !== []) {
+            $headers['Sec-WebSocket-Protocol'] = implode(', ', $endpoint->subprotocols);
+        }
+
+        $limit = max(125, $this->maximumMessageBytes);
+        $connector = new Rfc6455Connector(
+            connectionFactory: new Rfc6455ConnectionFactory(
+                parserFactory: new Rfc6455ParserFactory(
+                    messageSizeLimit: $limit,
+                    frameSizeLimit: $limit,
+                ),
+            ),
+        );
+
+        return new AppWebSocketConnection(
+            $connector->connect(new WebsocketHandshake($endpoint->url, $headers)),
+            $this->maximumMessageBytes,
+        );
+    }
+}
+```
+
+```php AppWebSocketConnection (TransportConnectionInterface)
+namespace App\Ai;
+
+use AiSdk\Exceptions\TransportException;
+use AiSdk\Live\Contracts\TransportConnectionInterface;
+use AiSdk\Live\TransportFrame;
+use AiSdk\Live\TransportFrameType;
+use Amp\Websocket\Client\WebsocketConnection as AmpWebsocketConnection;
+use Amp\Websocket\WebsocketCloseCode;
+
+final readonly class AppWebSocketConnection implements TransportConnectionInterface
+{
+    public function __construct(
+        private AmpWebsocketConnection $socket,
+        private int $maximumMessageBytes,
+    ) {}
+
+    public function send(TransportFrame $frame): void
+    {
+        if (strlen($frame->payload) > $this->maximumMessageBytes) {
+            throw new TransportException('A WebSocket message exceeded the configured byte limit.');
+        }
+
+        match ($frame->type) {
+            TransportFrameType::Text   => $this->socket->sendText($frame->payload),
+            TransportFrameType::Binary => $this->socket->sendBinary($frame->payload),
+        };
+    }
+
+    public function receive(): ?TransportFrame
+    {
+        $message = $this->socket->receive();
+        if ($message === null) {
+            return null;
+        }
+
+        $payload = $message->buffer(limit: $this->maximumMessageBytes);
+
+        return $message->isBinary()
+            ? TransportFrame::binary($payload)
+            : TransportFrame::text($payload);
+    }
+
+    public function finishSending(): void
+    {
+        if (! $this->socket->isClosed()) {
+            $this->socket->close(1000);
+        }
+    }
+
+    public function close(): void
+    {
+        if (! $this->socket->isClosed()) {
+            $this->socket->close();
+        }
+    }
+
+    public function isClosed(): bool
+    {
+        return $this->socket->isClosed();
+    }
+}
+```
+</CodeGroup>
+
+Pass an instance of your custom transport directly to `connect()`:
+
+```php
+use AiSdk\Live;
+
+$session = Live::voice()
+    ->model(/* your model */)
+    ->connect(new \App\Ai\AppWebSocketTransport(maximumMessageBytes: 8_388_608));
+```
+
+<Note>
+Your `send()` and `receive()` implementations run inside an amphp fiber, so you can use amphp's blocking-style async primitives without callbacks. If you are integrating with a different event loop, wrap your I/O in `Amp\async()` or equivalent.
+</Note>
+
+## Choosing a transport
+
+<CardGroup cols={3}>
+  <Card title="Transport::auto()" icon="wand-magic-sparkles">
+    Best default choice. Handles both WebSocket and HTTP/2 endpoints automatically.
+  </Card>
+  <Card title="Transport::webSocket()" icon="plug">
+    Use when you need fine-grained control over message size limits or TLS timeouts for WebSocket providers.
+  </Card>
+  <Card title="Transport::http2()" icon="server">
+    Use for providers that expose Live sessions over HTTP/2 streaming rather than WebSocket upgrades.
+  </Card>
+</CardGroup>
+
+<Warning>
+Both `WebSocketTransport` and `Http2Transport` throw `InvalidArgumentException` at construction time if you pass a byte limit of less than 1 or a negative timeout. Validate configuration values in your application before passing them to the transport factory.
+</Warning>

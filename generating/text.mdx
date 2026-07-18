@@ -1,0 +1,381 @@
+---
+title: "Generating Text Responses and Streams in PHP AI SDK"
+sidebarTitle: "Text"
+description: "Use Generate::text() to run prompts, multi-turn conversations, agentic tool loops, and streaming with any text model in one fluent chain."
+---
+
+`Generate::text()` is the primary entry point for every text-based interaction in the SDK. You describe what you want through a fluent builder, call `run()` or `stream()`, and receive a typed `TextResult` that carries the response text, token usage, any tool calls the model made, and optional structured output — all without touching a raw HTTP client.
+
+## Basic usage
+
+<Steps>
+  <Step title="Set a prompt">
+    Pass your prompt directly to `Generate::text()` as a convenience shortcut, or call `prompt()` on the builder.
+
+    <CodeGroup>
+    ```php Inline prompt
+    use AiSdk\Generate;
+
+    $result = Generate::text('Summarise the PHP 8.4 release notes in three bullet points.')
+        ->run();
+
+    echo $result->text;
+    ```
+
+    ```php Builder chain
+    use AiSdk\Generate;
+
+    $result = Generate::text()
+        ->prompt('Summarise the PHP 8.4 release notes in three bullet points.')
+        ->run();
+
+    echo $result->text;
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Add a system instruction">
+    Use `instructions()` to set a persistent system prompt that shapes every response in the conversation.
+
+    ```php
+    $result = Generate::text()
+        ->instructions('You are a senior PHP engineer. Always respond with idiomatic PHP 8.4 code.')
+        ->prompt('Show me a readonly class with constructor promotion.')
+        ->run();
+    ```
+  </Step>
+
+  <Step title="Build a multi-turn conversation">
+    Pass an array of `Message` instances with `messages()` when you need fine-grained control over the conversation history.
+
+    ```php
+    use AiSdk\Generate;
+    use AiSdk\Message;
+
+    $result = Generate::text()
+        ->messages([
+            Message::user('What is dependency injection?'),
+            Message::assistant('Dependency injection is a pattern where …'),
+            Message::user('Can you show me a PHP example?'),
+        ])
+        ->run();
+    ```
+  </Step>
+</Steps>
+
+## All builder methods
+
+<AccordionGroup>
+  <Accordion title="prompt(string $prompt)">
+    Appends a user message containing `$prompt` to the message list. You can call `prompt()` multiple times; each call adds a new user turn.
+
+    ```php
+    Generate::text()
+        ->prompt('Hello!')
+        ->prompt('What did I just say?')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="instructions(string $instructions)">
+    Sets the system prompt sent to the model before any conversation messages. Calling this method twice replaces the previous value.
+
+    ```php
+    Generate::text()
+        ->instructions('Reply only in haiku form.')
+        ->prompt('Tell me about PHP fibers.')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="messages(array $messages)">
+    Replaces the message list with the supplied `Message[]` array. Every element must be a `Message` instance; the SDK throws `InvalidArgumentException` otherwise. Use this when replaying or continuing an existing conversation thread.
+
+    ```php
+    use AiSdk\Message;
+    use AiSdk\Content;
+
+    Generate::text()
+        ->messages([
+            Message::user([
+                Content::text('Describe what you see.'),
+                Content::image('/path/to/screenshot.png'),
+            ]),
+        ])
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="temperature(float $temperature)">
+    Controls output randomness on a scale from `0.0` (deterministic) to `2.0` (highly varied). The SDK defaults to `1.0` when you do not call this method.
+
+    ```php
+    Generate::text()
+        ->prompt('Write a creative tagline for a PHP framework.')
+        ->temperature(1.4)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="maxTokens(int $maxTokens)">
+    Sets the upper bound on tokens the model may generate per step. The SDK uses `1024` by default.
+
+    ```php
+    Generate::text()
+        ->prompt('Write a one-sentence summary.')
+        ->maxTokens(64)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="topP(float $topP)">
+    Enables nucleus sampling, restricting token selection to the smallest set whose cumulative probability reaches `$topP`. Values between `0.0` and `1.0` are typical. Use either `topP` or `temperature`, not both.
+
+    ```php
+    Generate::text()
+        ->prompt('Generate a realistic product description.')
+        ->topP(0.9)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="maxSteps(int $maxSteps)">
+    Defines how many model–tool–model cycles the agentic loop may execute before returning. Each step consumes the same `TextModelRequest` with an updated message history. Defaults to `1`, meaning no tool loop unless you raise the value.
+
+    ```php
+    Generate::text()
+        ->prompt('What is the weather in Dublin right now?')
+        ->tools($weatherTool)
+        ->maxSteps(5)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="tools(mixed ...$tools) / tool(mixed $tool)">
+    Registers one or more tools the model may invoke. Pass `Tool` instances, invokable class names, or an array. Each tool name must be unique; the SDK throws on duplicates.
+
+    ```php
+    use AiSdk\Tool;
+    use AiSdk\Schema;
+
+    $search = Tool::make('search', 'Search the web')
+        ->input(Schema::object(properties: [
+            Schema::string('query', 'The search query'),
+        ]))
+        ->run(fn(array $args) => mySearch($args['query']));
+
+    Generate::text()
+        ->prompt('Find the latest PHP release.')
+        ->tools($search)
+        ->maxSteps(3)
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="toolChoice(ToolChoice|string $choice)">
+    Controls how the model selects tools. Accepts a `ToolChoice` enum value or one of the string shortcuts `'auto'`, `'none'`, `'required'`, or a specific tool name.
+
+    ```php
+    use AiSdk\ToolChoice;
+
+    Generate::text()
+        ->prompt('You must search for the answer.')
+        ->tools($searchTool)
+        ->toolChoice(ToolChoice::required())
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="reasoning(string|Reasoning $reasoning)">
+    Enables extended thinking for models that support it (such as Claude 3.7 Sonnet or o3). Pass an effort string (`'minimal'`, `'low'`, `'medium'`, `'high'`) or a `Reasoning` object built with `Reasoning::effort()` or `Reasoning::budget()`.
+
+    ```php
+    use AiSdk\Reasoning;
+
+    Generate::text()
+        ->prompt('Prove that P ≠ NP.')
+        ->reasoning(Reasoning::effort('high'))
+        ->run();
+
+    // Or with a token budget:
+    Generate::text()
+        ->prompt('Outline a refactor plan.')
+        ->reasoning(Reasoning::budget(4000))
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="model(Model $model)">
+    Overrides the default model for this request. Call `Generate::model()` once at boot time to set a global default and skip per-request calls.
+
+    ```php
+    use AiSdk\ProviderModel;
+
+    Generate::text()
+        ->model(ProviderModel::openai('gpt-4o'))
+        ->prompt('Hello from GPT-4o.')
+        ->run();
+    ```
+  </Accordion>
+
+  <Accordion title="providerOptions(string $provider, array $options)">
+    Passes provider-specific options that the SDK does not expose natively. The options are namespaced by provider string so they never collide.
+
+    ```php
+    Generate::text()
+        ->prompt('Translate to French.')
+        ->providerOptions('openai', ['logprobs' => true])
+        ->run();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Structured output
+
+Call `output()` before `run()` to receive a parsed PHP value instead of raw text. Pass a `Schema` describing the shape you expect.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Schema;
+
+$result = Generate::text()
+    ->instructions('Extract the data and return it as JSON matching the schema.')
+    ->prompt('Alice is 30 years old and lives in Cork.')
+    ->output(Schema::object(
+        name: 'person',
+        properties: [
+            Schema::string('name'),
+            Schema::integer('age'),
+            Schema::string('city'),
+        ]
+    ))
+    ->run();
+
+// $result->output is the validated PHP array / object
+var_dump($result->output);
+```
+
+<Note>
+  When you call `output()`, `$result->text` still contains the raw JSON string the model produced. `$result->output` holds the decoded and schema-validated value.
+</Note>
+
+## Streaming
+
+Replace `run()` with `stream()` to receive tokens as they arrive. Iterate the returned `Stream` object and inspect each `StreamPart`.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Streaming\TextDeltaPart;
+use AiSdk\Streaming\FinishPart;
+
+$stream = Generate::text()
+    ->prompt('Write a short story about a PHP developer.')
+    ->stream();
+
+foreach ($stream as $part) {
+    if ($part instanceof TextDeltaPart) {
+        echo $part->delta;
+    }
+
+    if ($part instanceof FinishPart) {
+        echo "\n\nFinish reason: " . $part->finishReason->value;
+    }
+}
+```
+
+<Tip>
+  You can also stream reasoning deltas (`ReasoningDeltaPart`) and tool-call deltas (`ToolCallDeltaPart`, `ToolCallStartPart`) from the same loop when those capabilities are enabled.
+</Tip>
+
+## Multi-step agentic loop
+
+Set `maxSteps()` to a value greater than `1` and provide tools. The SDK automatically executes tool calls, appends the results to the message history, and re-prompts the model until it produces a final text response or reaches the step limit.
+
+```php
+use AiSdk\Generate;
+use AiSdk\Tool;
+use AiSdk\Schema;
+
+$getTemperature = Tool::make('get_temperature', 'Return the current temperature for a city')
+    ->input(Schema::object(properties: [
+        Schema::string('city', 'The city name'),
+    ]))
+    ->run(function (array $args): string {
+        // Replace with a real weather API call
+        return json_encode(['city' => $args['city'], 'celsius' => 18]);
+    });
+
+$getTime = Tool::make('get_time', 'Return the current UTC time')
+    ->run(fn(): string => date('H:i:s \U\T\C'));
+
+$result = Generate::text()
+    ->instructions('You are a helpful assistant. Use tools to answer factual questions.')
+    ->prompt('What is the temperature in Paris, and what time is it in UTC right now?')
+    ->tools($getTemperature, $getTime)
+    ->maxSteps(6)
+    ->run();
+
+echo $result->text;
+
+// Inspect every tool interaction
+foreach ($result->toolCalls as $call) {
+    echo "Called: {$call->name}\n";
+    echo "Args: " . json_encode($call->arguments) . "\n";
+}
+
+foreach ($result->toolResults as $res) {
+    echo "Result from {$res->toolName}: " . json_encode($res->output) . "\n";
+}
+```
+
+## The TextResult object
+
+`run()` returns a `TextResult` with these read-only fields:
+
+<ResponseField name="text" type="string" required>
+  The final text response from the model after all steps complete.
+</ResponseField>
+
+<ResponseField name="reasoning" type="string|null">
+  The model's internal chain-of-thought text when reasoning is enabled. `null` if the model or provider does not surface reasoning.
+</ResponseField>
+
+<ResponseField name="output" type="mixed">
+  The decoded and validated structured output when you called `output()` on the builder. `null` for plain-text requests.
+</ResponseField>
+
+<ResponseField name="toolCalls" type="ToolCall[]">
+  Every tool call the model made across all steps. Each `ToolCall` has `id` (string), `name` (string), and `arguments` (array).
+</ResponseField>
+
+<ResponseField name="toolResults" type="ToolResult[]">
+  The results your tool handlers returned for each call. Each `ToolResult` has `toolCallId`, `toolName`, and `output`.
+</ResponseField>
+
+<ResponseField name="finishReason" type="FinishReason">
+  A `FinishReason` enum value describing why generation stopped: `Stop`, `Length`, `ToolCalls`, `ContentFilter`, `Error`, or `Unknown`.
+</ResponseField>
+
+<ResponseField name="usage" type="Usage">
+  Token consumption for the entire request. Contains `inputTokens` (int), `outputTokens` (int), `totalTokens` (int), and optional `reasoningTokens` and `cachedInputTokens`.
+</ResponseField>
+
+<ResponseField name="rawResponse" type="array">
+  The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
+</ResponseField>
+
+## Usage tracking
+
+```php
+$result = Generate::text()
+    ->prompt('Explain fibers in PHP 8.1.')
+    ->run();
+
+echo "Input tokens:  {$result->usage->inputTokens}\n";
+echo "Output tokens: {$result->usage->outputTokens}\n";
+echo "Total tokens:  {$result->usage->totalTokens}\n";
+```
+
+<Warning>
+  Token counts reflect the totals for all steps in a multi-step run, not just the final response step. Budget your `maxSteps` and `maxTokens` accordingly.
+</Warning>
