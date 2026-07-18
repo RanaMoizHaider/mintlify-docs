@@ -4,84 +4,24 @@ sidebarTitle: "OpenAI-Compatible"
 description: "Use any endpoint that speaks the OpenAI API wire format — Groq, xAI, OpenRouter, Mistral, Ollama, and more — with zero extra packages."
 ---
 
-The `aisdk/openai-compatible` package is the shared wire-format layer that powers every provider in the PHP AI SDK that speaks the OpenAI API shape. You never install or import it directly — instead, provider packages like `aisdk/openai` depend on it under the hood. But understanding what it does explains exactly how to point the SDK at any third-party endpoint that implements the OpenAI Chat Completions or Responses API, including Groq, xAI Grok, OpenRouter, Mistral, and locally-running models via Ollama.
+The `aisdk/openai-compatible` package is the shared wire-format layer that powers every provider in the PHP AI SDK that speaks the OpenAI API shape. You never install or import it directly — instead, provider packages like `aisdk/openai` depend on it under the hood. Understanding what it does explains exactly how to point the SDK at any third-party endpoint that implements the OpenAI Chat Completions or Responses API, including Groq, xAI Grok, OpenRouter, Mistral, and locally-running models via Ollama.
 
 ## How it works
 
-When you call `OpenAI::create(['baseUrl' => 'https://api.groq.com/openai/v1'])`, the `OpenAIProvider` you get back still uses all the same `aisdk/openai-compatible` builders and parsers — the only difference is the base URL. Every request goes to Groq's endpoint but is assembled by the same `ChatRequestBuilder` that talks to `api.openai.com`. This means you get full SDK features (streaming, tool calling, structured output, and reasoning) on any compliant endpoint for free.
+When you call `OpenAI::create(['baseUrl' => 'https://api.groq.com/openai/v1'])`, the provider you get back still uses the same underlying request builders and parsers — the only difference is the base URL. Every request goes to Groq's endpoint but is assembled by the same logic that talks to `api.openai.com`. This means you get full SDK features (streaming, tool calling, structured output, and reasoning) on any compliant endpoint for free.
 
 <CardGroup cols={2}>
   <Card title="Chat Completions API" icon="message">
-    The classic `/chat/completions` format. Supported by virtually every OpenAI-compatible provider. Used by default via `ChatRequestBuilder`.
+    The classic `/chat/completions` format. Supported by virtually every OpenAI-compatible provider and used by default.
   </Card>
   <Card title="Responses API" icon="bolt">
-    OpenAI's newer stateful `/responses` API shape. Used by `ResponsesRequestBuilder` for endpoints that support it. Enables richer tool flows and built-in conversation state.
+    OpenAI's newer stateful `/responses` API shape. Available for endpoints that support it. Enables richer tool flows and built-in conversation state.
   </Card>
 </CardGroup>
 
----
+### Per-model request adjustments
 
-## The ChatRequestProfile system
-
-Different endpoints that claim "OpenAI compatibility" have subtle wire-format differences. For example, OpenAI's own o-series reasoning models use `max_completion_tokens` instead of `max_tokens`, and they do not accept a `temperature` field. The `ChatRequestProfile` class encodes these per-model or per-provider quirks so that `ChatRequestBuilder` can produce the exact payload each endpoint expects.
-
-<Accordion title="ChatRequestProfile constructor defaults">
-
-```php
-// From aisdk/openai-compatible/src/ChatRequestProfile.php
-final readonly class ChatRequestProfile
-{
-    public function __construct(
-        public ?string $maxTokensParameter = 'max_tokens',
-        public bool $includeTemperature = true,
-        public bool $omitTemperatureWhenReasoning = false,
-        public bool $includeStreamOptions = true,
-        public bool $supportsStructuredOutput = true,
-        public ?string $reasoningEffortParameter = 'reasoning_effort',
-    ) {}
-}
-```
-
-The defaults match a generic OpenAI-compatible endpoint. Most third-party providers work correctly with no profile customization at all.
-
-</Accordion>
-
-<Accordion title="ChatRequestProfile::openAI(modelId) — for native OpenAI models">
-
-```php
-public static function openAI(string $modelId): self
-{
-    return new self(
-        maxTokensParameter: 'max_completion_tokens',
-        includeTemperature: ! self::isReasoningModel($modelId),
-        omitTemperatureWhenReasoning: true,
-    );
-}
-```
-
-`OpenAITextModel` calls `ChatRequestProfile::openAI($this->modelId)` for every request. It switches to `max_completion_tokens` and drops temperature for o-series and gpt-5-series models. You never need to configure this yourself.
-
-</Accordion>
-
-<Accordion title="ChatRequestProfile::azure() — for Azure OpenAI">
-
-```php
-public static function azure(): self
-{
-    return new self(
-        maxTokensParameter: 'max_completion_tokens',
-        omitTemperatureWhenReasoning: true,
-    );
-}
-```
-
-The Azure profile uses `max_completion_tokens` for all model IDs (Azure routes the same model ID to the correct deployment) but keeps temperature for non-reasoning requests.
-
-</Accordion>
-
-### ResponsesRequestProfile
-
-The Responses API has its own parallel profile class for `ResponsesRequestBuilder`. Its defaults use `max_output_tokens` and `reasoning.effort` (dot-path notation), and it omits sampling parameters whenever a reasoning configuration is present.
+Different endpoints that claim "OpenAI compatibility" have subtle wire-format differences. For example, OpenAI's own o-series reasoning models use `max_completion_tokens` instead of `max_tokens`, and they do not accept a `temperature` field. The SDK handles these per-model quirks automatically when you use `OpenAI::create()` — you never need to configure them yourself. For Azure OpenAI, the same automatic adjustments apply across all deployed model IDs.
 
 ---
 
@@ -118,7 +58,7 @@ You can reach any OpenAI-compatible service by passing a custom `baseUrl` (and t
 
 ### Groq
 
-Groq provides an OpenAI-compatible endpoint at `https://api.groq.com/openai/v1`. Groq uses standard Chat Completions parameters including `max_tokens`, so the default `ChatRequestProfile` works with no adjustments.
+Groq provides an OpenAI-compatible endpoint at `https://api.groq.com/openai/v1`. Standard Chat Completions parameters work with no extra configuration.
 
 ```php
 use AiSdk\Generate;
@@ -247,7 +187,7 @@ Not every OpenAI-compatible endpoint supports every SDK capability. The table be
 | Text generation | ✅ | Universal |
 | Streaming | ✅ | Universal via SSE |
 | Tool calling | ✅ Most | Some small or local models may not support it |
-| Structured output (`json_schema`) | ⚡ Varies | Requires explicit provider support; `supportsStructuredOutput: false` disables it |
+| Structured output (`json_schema`) | ⚡ Varies | Requires explicit provider support |
 | Reasoning effort | ⚡ Varies | Only on providers/models that expose a `reasoning_effort`-style parameter |
 | Embeddings | ⚡ Varies | Endpoint must expose `/embeddings` |
 | Image generation | ❌ Rare | Few third-party providers offer it |

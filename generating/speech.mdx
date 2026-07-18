@@ -119,6 +119,14 @@ $result->output->save('/var/www/public/audio/welcome.mp3');
   Token or character consumption reported by the provider. Contains `inputTokens` and `outputTokens` where applicable.
 </ResponseField>
 
+<ResponseField name="rawResponse" type="array">
+  The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
+</ResponseField>
+
+<ResponseField name="providerMetadata" type="array">
+  Provider-specific metadata returned alongside the response. Keys and values are provider-defined.
+</ResponseField>
+
 ## The AudioData object
 
 `AudioResult::$output` is an `AudioData` instance:

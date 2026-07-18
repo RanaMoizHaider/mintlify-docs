@@ -255,6 +255,14 @@ saveJobId($job->id);
   Compute consumption for the completed job.
 </ResponseField>
 
+<ResponseField name="rawResponse" type="array">
+  The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
+</ResponseField>
+
+<ResponseField name="providerMetadata" type="array">
+  Provider-specific metadata returned alongside the response. Keys and values are provider-defined.
+</ResponseField>
+
 `VideoResult::$output` is a `VideoData` instance:
 
 <ResponseField name="url" type="string|null">

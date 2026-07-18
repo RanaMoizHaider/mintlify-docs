@@ -32,6 +32,8 @@ use AiSdk\Streaming\ReasoningDeltaPart;
 use AiSdk\Streaming\ToolCallStartPart;
 use AiSdk\Streaming\ToolCallDeltaPart;
 use AiSdk\Streaming\FinishPart;
+use AiSdk\Streaming\ErrorPart;
+use AiSdk\Streaming\ProviderMetadataPart;
 
 foreach ($stream->parts() as $part) {
     if ($part instanceof TextDeltaPart) {
@@ -50,14 +52,20 @@ foreach ($stream->parts() as $part) {
     }
 
     if ($part instanceof ToolCallDeltaPart) {
-        // A fragment of the tool call's argument JSON, keyed by slot $part->index.
-        // The SDK accumulates fragments; you rarely need to handle these directly.
+        // A fragment of the tool call's argument JSON ($part->argsJson), keyed
+        // by slot $part->index. The SDK accumulates fragments internally; you
+        // rarely need to handle these directly.
     }
 
     if ($part instanceof FinishPart) {
         // The stream is done. Contains the finish reason and token usage.
         echo "\nFinish reason: {$part->reason->name}";
         echo "\nTotal tokens: {$part->usage->totalTokens}";
+    }
+
+    if ($part instanceof ProviderMetadataPart) {
+        // Raw provider-specific metadata (provider name + associative array).
+        error_log("[{$part->provider}] metadata: " . json_encode($part->metadata));
     }
 }
 ```
@@ -77,11 +85,19 @@ foreach ($stream->parts() as $part) {
 </ResponseField>
 
 <ResponseField name="ToolCallDeltaPart" type="StreamPart">
-  A fragment of argument JSON for an in-progress tool call. `$part->index` links it to the corresponding `ToolCallStartPart`. The SDK assembles complete calls internally.
+  A fragment of argument JSON for an in-progress tool call. `$part->index` links it to the corresponding `ToolCallStartPart`; `$part->argsJson` is the raw JSON fragment. The SDK assembles complete calls internally — you rarely need to process these yourself.
 </ResponseField>
 
 <ResponseField name="FinishPart" type="StreamPart">
-  Emitted once when generation ends. Contains `$part->reason` (`FinishReason` enum) and `$part->usage` (token counts).
+  Emitted once when generation ends. Contains `$part->reason` (`FinishReason` enum) and `$part->usage` (token counts including `inputTokens`, `outputTokens`, and `totalTokens`).
+</ResponseField>
+
+<ResponseField name="ErrorPart" type="StreamPart">
+  Emitted when the provider signals an error mid-stream. `$part->error` is a `Throwable`. If an `onError` hook is registered the error is passed to it and the stream continues; otherwise it is re-thrown.
+</ResponseField>
+
+<ResponseField name="ProviderMetadataPart" type="StreamPart">
+  Carries raw provider-specific metadata emitted during the stream. `$part->provider` is the provider name string and `$part->metadata` is an associative array of arbitrary key-value data. Use this to access provider extensions not yet modelled by the SDK.
 </ResponseField>
 
 ## Text-only streaming with chunks()

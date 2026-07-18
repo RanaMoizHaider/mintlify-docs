@@ -83,12 +83,14 @@ You can also supply a custom `WebsocketConnector` as a fifth argument if you nee
 use AiSdk\Transport;
 
 $transport = Transport::http2(
-    requestBufferBytes:        65_536,    // 64 KiB upload buffer per request
-    connectTimeout:            10,        // seconds before TCP connection times out
-    tlsHandshakeTimeout:       10,        // seconds before TLS handshake times out
-    inactivityTimeout:         0,         // 0 = no inactivity timeout
-    transferTimeout:           0,         // 0 = no transfer timeout
-    maximumRequestChunkBytes:  16_777_216, // maximum size of a single outbound chunk
+    requestBufferBytes:         65_536,     // 64 KiB upload buffer per request
+    connectTimeout:             10,         // seconds before TCP connection times out
+    tlsHandshakeTimeout:        10,         // seconds before TLS handshake times out
+    inactivityTimeout:          0,          // 0 = no inactivity timeout
+    transferTimeout:            0,          // 0 = no transfer timeout
+    maximumRequestChunkBytes:   16_777_216, // maximum size of a single outbound chunk
+    maximumResponseChunkBytes:  16_777_216, // maximum size of a single inbound chunk
+    maximumErrorBodyBytes:      65_536,     // maximum size of an error response body
 );
 ```
 
@@ -116,6 +118,14 @@ The overall maximum duration for a single streaming request, regardless of activ
 
 <Accordion title="maximumRequestChunkBytes (default: 16 MiB)">
 The maximum size of a single outbound chunk written to the HTTP/2 request body. Tune this to match your provider's chunk size expectations.
+</Accordion>
+
+<Accordion title="maximumResponseChunkBytes (default: 16 MiB)">
+The maximum size of a single inbound chunk read from the HTTP/2 response body. Increase this value if the provider sends large response frames.
+</Accordion>
+
+<Accordion title="maximumErrorBodyBytes (default: 64 KiB)">
+The maximum number of bytes buffered from an error response body before it is truncated. Increase this value if you need the full body of unusually large provider error responses.
 </Accordion>
 
 You can inject a pre-configured `DelegateHttpClient` as the first argument — for example to share connection pools across your application or to replace the client in tests.

@@ -244,6 +244,23 @@ return response()->json([
 
 The browser can then use the `client_secret` value with the provider's browser SDK to open an authenticated WebRTC connection without any server-side audio proxying.
 
+If you need to perform the full SDP negotiation yourself — for example to handle the RTCPeerConnection on your server and relay audio — use `webRtc(string $offerSdp)` instead. Pass the browser's SDP offer and return the answer to the client:
+
+```php
+use AiSdk\Live;
+
+// $offerSdp comes from the browser's RTCPeerConnection.createOffer()
+$answer = Live::transcribe()
+    ->model(/* your model */)
+    ->language('en')
+    ->webRtc($offerSdp);
+
+return response()->json([
+    'sdp'     => $answer->sdp,
+    'call_id' => $answer->callId,
+]);
+```
+
 <Warning>
-`clientSecret()` requires a model that implements `LiveClientSecretModelInterface`. Calling it on an unsupported model throws `InvalidArgumentException`.
+`clientSecret()` requires a model that implements `LiveClientSecretModelInterface`, and `webRtc()` requires one that implements `LiveWebRtcModelInterface`. Calling either on an unsupported model throws `InvalidArgumentException`.
 </Warning>

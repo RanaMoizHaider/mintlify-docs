@@ -111,8 +111,10 @@ echo Capability::TextGeneration->name();   // 'text_generation'
 echo Capability::StructuredOutput->name(); // 'structured_output'
 echo Capability::ImageInput->name();       // 'image_input'
 
-// Resolve a Capability from a string (e.g. from a config value):
+// Resolve a Capability from a string (e.g. from a config value).
+// Returns null for unrecognised names.
 $cap = Capability::fromName('tool_calling'); // Capability::ToolCalling
+$unknown = Capability::fromName('unknown_feature'); // null
 ```
 
 ## Choosing the right model

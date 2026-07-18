@@ -16,7 +16,7 @@ The SDK ships two complementary configuration paths: `SdkFactory`, a fluent buil
 | `requestFactory` | `RequestFactoryInterface` | PSR-17 factory for outbound HTTP requests |
 | `streamFactory` | `StreamFactoryInterface` | PSR-17 factory for request bodies |
 | `logger` | `?LoggerInterface` | Optional PSR-3 logger for request traces |
-| `container` | `?ContainerInterface` | Optional PSR-11 container for tool resolution |
+| `container` | `?ContainerInterface` | Optional PSR-11 container for class-based tool resolution |
 | `userAgent` | `string` | Sent in every request, defaults to `aisdk-php/1.0` |
 | `defaultModel` | `?Model` | Fallback model for all modalities |
 | `defaultTextModel` | `?Model` | Default for `Generate::text()` / `$sdk->text()` |
@@ -32,7 +32,7 @@ The SDK ships two complementary configuration paths: `SdkFactory`, a fluent buil
 
 <Steps>
   <Step title="Create a SdkFactory instance">
-    Instantiate `SdkFactory` — no constructor arguments are required.
+    Instantiate `SdkFactory` with `new SdkFactory()` — no constructor arguments are required.
   </Step>
   <Step title="Chain builder methods">
     Call any combination of `with*` methods to configure the HTTP client, logger, container, timeouts, and default models.
@@ -104,7 +104,7 @@ $sdk = (new SdkFactory())
   </Accordion>
 
   <Accordion title="withContainer(ContainerInterface $container)">
-    Registers a PSR-11 container used to resolve tool dependencies during tool execution. See the framework integration examples below.
+    Registers a PSR-11 `ContainerInterface` used for class-based tool resolution — when a tool is defined as a class name string, the SDK resolves it through this container. See the framework integration examples below.
 
     ```php
     $sdk = (new SdkFactory())
@@ -285,11 +285,13 @@ use Symfony\Component\DependencyInjection\Loader\Configurator\ContainerConfigura
 return static function (ContainerConfigurator $container): void {
     $services = $container->services();
 
+    // Register SdkFactory as a service first
+    $services->set(SdkFactory::class)
+        ->call('withDefaultTextModel', [OpenAI::model('gpt-4o')]);
+
+    // Sdk is built by calling make() on the SdkFactory service instance
     $services->set(Sdk::class)
-        ->factory([SdkFactory::class, 'make'])
-        ->args([
-            OpenAI::model('gpt-4o'),   // defaultTextModel
-        ]);
+        ->factory([ref(SdkFactory::class), 'make']);
 };
 ```
 </CodeGroup>

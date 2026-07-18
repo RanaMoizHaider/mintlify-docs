@@ -1,5 +1,5 @@
 ---
-title: "Installing the PHP AI SDK via Composer"
+title: "PHP AI SDK Installation: Packages, Env Vars, and Config"
 sidebarTitle: "Installation"
 description: "System requirements, per-package Composer commands, environment variable reference, and programmatic provider configuration for the PHP AI SDK."
 ---
@@ -197,7 +197,7 @@ $stack = HandlerStack::create();
 $factory = new Psr17Factory();
 
 Generate::configure(new Sdk(
-    httpClient: new \GuzzleHttp\Client(['handler' => $stack]),
+    httpClient: new Client(['handler' => $stack]),
     requestFactory: $factory,
     streamFactory: $factory,
 ));

@@ -131,6 +131,14 @@ echo $result->output->mimeType;    // e.g. "image/png"
   Token or image-unit consumption reported by the provider. Contains `inputTokens` and `outputTokens` where applicable.
 </ResponseField>
 
+<ResponseField name="rawResponse" type="array">
+  The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
+</ResponseField>
+
+<ResponseField name="providerMetadata" type="array">
+  Provider-specific metadata returned alongside the response. Keys and values are provider-defined.
+</ResponseField>
+
 ## The ImageData object
 
 Each image in `$result->images` is an `ImageData` instance:
@@ -175,7 +183,8 @@ $result = Generate::image('A PHP mascot in various art styles')
     ->size('1024x1024')
     ->run();
 
-echo "Generated {count($result->images)} images\n";
+$imageCount = count($result->images);
+echo "Generated {$imageCount} images\n";
 
 foreach ($result->images as $i => $image) {
     echo "Image {$i}: mimeType={$image->mimeType}\n";

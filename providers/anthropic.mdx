@@ -66,6 +66,10 @@ Anthropic::create([
   </Card>
 </CardGroup>
 
+<Note>
+  You can also supply a pre-configured `sdk` key (an `AiSdk\Support\Sdk` instance) to inject a custom HTTP client, request factory, or stream factory. See the [SDK configuration](/advanced/sdk-configuration) guide for details.
+</Note>
+
 ### Enabling beta features via headers
 
 Anthropic gates new capabilities behind `anthropic-beta` headers. Pass them in the `headers` config key so they are attached to every request made by this provider instance.

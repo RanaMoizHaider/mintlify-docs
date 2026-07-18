@@ -58,6 +58,10 @@ The SDK is a collection of Composer packages built on PSR standards. The `aisdk/
     Build messages that mix text, images, audio, and file content using `Content::text()`, `Content::image()`, `Content::audio()`, and `Content::file()`. Each provider adapter translates the unified content representation into its own wire format automatically.
   </Accordion>
 
+  <Accordion title="Video generation" icon="film">
+    Call `Generate::video('Your prompt')->model(...)->run()` to request a video and receive a `VideoResult`. For providers that queue generation asynchronously, `Generate::videoJob()` is a named alias for `Generate::video()` that makes the async intent explicit — both methods return the same `PendingVideoRequest` and the SDK handles job polling transparently.
+  </Accordion>
+
   <Accordion title="Live sessions" icon="microphone">
     Use `Live::voice()`, `Live::transcribe()`, and `Live::translate()` for stateful, real-time audio sessions over WebSocket or HTTP/2. The `aisdk/transport` package provides `Transport::webSocket()` and `Transport::http2()` implementations, or you can supply your own by implementing `TransportInterface`.
   </Accordion>

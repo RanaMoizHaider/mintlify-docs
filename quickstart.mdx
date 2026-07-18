@@ -87,8 +87,8 @@ This guide walks you through installing the PHP AI SDK, configuring an OpenAI pr
     | `$result->providerMetadata` | `array` | Raw provider-specific fields |
   </Step>
 
-  <Step title="Inspect the output">
-    Print the text or use any property on `TextResult` in your application logic.
+  <Step title="Set a global default model">
+    Instead of chaining `->model(...)` on every call, register a global default once with `Generate::model()`. All subsequent `Generate::text()`, `Generate::image()`, and other generation calls use that model automatically unless overridden per-request.
 
     ```php
     <?php
@@ -98,14 +98,22 @@ This guide walks you through installing the PHP AI SDK, configuring an OpenAI pr
 
     OpenAI::create();
 
-    $result = Generate::text('What is the capital of France?')
-        ->model(OpenAI::model('gpt-4o-mini'))
-        ->run();
+    // Register gpt-4o-mini as the default for all generation calls.
+    Generate::model(OpenAI::model('gpt-4o-mini'));
+
+    // No ->model(...) needed here — the global default is used.
+    $result = Generate::text('What is the capital of France?')->run();
 
     echo $result->text . PHP_EOL;
-    echo "Tokens used: {$result->usage->totalTokens}" . PHP_EOL;
+    echo "Finish reason: {$result->finishReason->value}" . PHP_EOL;
+    echo "Input tokens:  {$result->usage->inputTokens}" . PHP_EOL;
+    echo "Output tokens: {$result->usage->outputTokens}" . PHP_EOL;
+    echo "Total tokens:  {$result->usage->totalTokens}" . PHP_EOL;
     ```
 
+    <Tip>
+      Call `Generate::reset()` to clear the stored default — useful in tests or long-running processes where you need to swap providers between requests.
+    </Tip>
   </Step>
 
 </Steps>
@@ -189,7 +197,7 @@ echo "Tool calls made: " . count($result->toolCalls) . PHP_EOL;
 ```
 
 <Note>
-  Setting `->maxSteps(n)` controls how many model ↔ tool round-trips the SDK permits. The default is `1`, meaning the model can call tools but the loop stops after the first tool response. Increase this value when your task requires multiple tool invocations before the model can produce a final answer.
+  Setting `->maxSteps(n)` controls how many model ↔ tool round-trips the SDK permits before returning. The default is `1`: the model makes one request, the SDK executes any tools that were called, and then returns the result — without sending those tool results back to the model for a follow-up response. Set `->maxSteps(3)` or higher when you want the model to receive the tool output and continue reasoning toward a final text answer.
 </Note>
 
 ## Next steps

@@ -82,7 +82,7 @@ use AiSdk\OpenAI;
 $model = OpenAI::model('gpt-4o');
 ```
 
-If you registered the provider with `OpenAI::create()` at boot, you can call `OpenAI::model()` from anywhere in your application and it always uses the same configured provider.
+If you registered the provider with `OpenAI::create()` at boot, you can call `OpenAI::model()` from anywhere in your application and it always uses the same configured provider. You can also retrieve the registered provider instance directly with `OpenAI::default()`.
 
 ---
 
@@ -97,6 +97,10 @@ The table below lists every SDK capability and the recommended OpenAI model for 
 | Tool calling | Parallel function/tool calls with automatic loop | `gpt-4o`, `gpt-4o-mini` |
 | Structured output | Native JSON Schema mode (`json_schema`) | `gpt-4o`, `gpt-4o-mini` |
 | Reasoning | `reasoning_effort` on o-series models | `o3`, `o4-mini` |
+| Text input | Plain-text message content | `gpt-4o`, `gpt-4o-mini` |
+| Image input | Inline image content parts (JPEG, PNG, WebP, GIF) | `gpt-4o`, `gpt-4o-mini` |
+| Audio input | Inline audio content parts | `gpt-4o-audio-preview` |
+| File input | Uploaded file content parts (PDF, text) | `gpt-4o`, `gpt-4o-mini` |
 | Embeddings | Dense vector embeddings | `text-embedding-3-small`, `text-embedding-3-large` |
 | Image generation | Text-to-image via `/images/generations` | `dall-e-3`, `gpt-image-1` |
 | Speech (TTS) | Text-to-speech audio synthesis | `tts-1`, `tts-1-hd` |
@@ -185,7 +189,7 @@ echo $result->text;
 ```
 
 <Tip>
-  Temperature is omitted automatically for o-series reasoning models. The SDK detects model IDs matching `^o\d` or `^gpt-5` and applies the correct `ChatRequestProfile` without any extra configuration from you.
+  Temperature is omitted automatically for o-series and gpt-5-series reasoning models. The SDK detects these model IDs and adjusts the request format without any extra configuration from you.
 </Tip>
 
 ---

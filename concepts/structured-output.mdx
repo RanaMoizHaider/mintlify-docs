@@ -59,7 +59,7 @@ Anthropic::create();
 $result = Generate::text()
     ->model(Anthropic::model('claude-sonnet-4-5'))
     ->prompt('Classify the following support ticket as urgent, normal, or low.')
-    ->system('Reply with only the classification.')
+    ->instructions('Reply with only the classification.')
     ->output(Output::enum(['urgent', 'normal', 'low']))
     ->run();
 
@@ -165,7 +165,7 @@ $articleText = file_get_contents('/content/article.txt');
 
 $result = Generate::text()
     ->model(OpenAI::model('gpt-4o'))
-    ->system('You extract structured metadata from article text. Be concise and precise.')
+    ->instructions('You extract structured metadata from article text. Be concise and precise.')
     ->prompt("Extract metadata from this article:\n\n{$articleText}")
     ->output(Output::schema($schema))
     ->run();

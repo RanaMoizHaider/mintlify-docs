@@ -126,6 +126,7 @@ use AiSdk\Live\AudioDelta;
 use AiSdk\Live\TextDelta;
 use AiSdk\Live\SpeechStarted;
 use AiSdk\Live\SpeechStopped;
+use AiSdk\Live\Interrupted;
 use AiSdk\Live\ToolCallEvent;
 use AiSdk\Live\ToolResultEvent;
 use AiSdk\Live\ResponseCompleted;
@@ -139,6 +140,7 @@ foreach ($session->events() as $event) {
         $event instanceof TextDelta       => print($event->delta),
         $event instanceof SpeechStarted   => log('User started speaking at ' . $event->audioStartMs . ' ms'),
         $event instanceof SpeechStopped   => log('User stopped speaking at ' . $event->audioEndMs . ' ms'),
+        $event instanceof Interrupted     => log('Response ' . $event->responseId . ' was interrupted'),
         $event instanceof ToolCallEvent   => handleTool($session, $event),
         $event instanceof ToolResultEvent => log('Tool ' . $event->name . ' returned result (auto=' . ($event->automatic ? 'true' : 'false') . ')'),
         $event instanceof ResponseCompleted => log('Response ' . $event->responseId . ' complete'),
@@ -174,6 +176,16 @@ Fires when the model detects that the user has begun speaking. `$event->audioSta
 Fires when the model detects that the user has stopped speaking. `$event->audioEndMs` is the end timestamp.
 </Accordion>
 
+<Accordion title="Interrupted — interrupted">
+Fires when the model's in-progress response is interrupted — for example because the user started speaking again. `$event->responseId` identifies the response that was cut short, or `null` if the provider does not report it.
+
+```php
+if ($event instanceof Interrupted) {
+    clearAudioPlaybackBuffer();
+}
+```
+</Accordion>
+
 <Accordion title="ToolCallEvent — tool.call">
 The model wants to invoke a tool. Properties: `$event->callId` (unique call identifier), `$event->name` (tool name), `$event->arguments` (decoded argument array). If you registered the tool with a handler via `->tool()`, the session executes it automatically and yields a `ToolResultEvent` with `automatic = true`. Otherwise, handle it yourself and call `$session->sendToolResult()`.
 
@@ -203,6 +215,19 @@ Indicates a recoverable or non-recoverable error from the provider. `$event->mes
 
 <Accordion title="LiveClosed — closed">
 The final event in any session. `$event->code` is the WebSocket close code (if applicable) and `$event->reason` is a human-readable description. The `foreach` loop ends naturally after this event.
+</Accordion>
+
+<Accordion title="ProviderEvent — provider">
+Carries a raw, unrecognized event emitted by the provider. The SDK preserves these so you can handle provider-specific events the SDK does not yet map to a typed class. `$event->providerType` is the event type string from the provider; `$event->payload` is the decoded event data.
+
+```php
+use AiSdk\Live\ProviderEvent;
+
+if ($event instanceof ProviderEvent) {
+    // log or handle provider-specific events
+    logger()->debug('Provider event', ['type' => $event->providerType, 'payload' => $event->payload]);
+}
+```
 </Accordion>
 
 ## Automatic tool execution
@@ -331,4 +356,45 @@ return response()->json([
 
 <Warning>
 `clientSecret()` and `webRtc()` are only available on models that implement `LiveClientSecretModelInterface` and `LiveWebRtcModelInterface` respectively. Calling them on an unsupported model throws `InvalidArgumentException`.
+</Warning>
+
+## Provider-hosted calls
+
+Some providers support receiving inbound calls that the provider routes to your application. Use `call()` to attach your session builder to an existing call ID supplied by the provider's webhook or telephony system.
+
+### call(string $callId)
+
+Returns a `LiveCall` instance representing the inbound call. Call `accept()` to signal readiness, then `connect()` to open the `LiveSession`.
+
+```php
+use AiSdk\Live;
+use AiSdk\Transport;
+
+// $callId is delivered by the provider's inbound call webhook
+$call = Live::voice()
+    ->model(/* your model */)
+    ->voice('alloy')
+    ->call($callId);
+
+// Accept the inbound call and open a session
+$session = $call->accept()->connect(Transport::auto());
+
+// Interact with the session as normal
+foreach ($session->events() as $event) {
+    // handle events...
+}
+
+// Hang up when done
+$call->hangup();
+```
+
+`LiveCall` exposes four methods:
+
+- `id(): string` — the provider call ID.
+- `accept(): LiveCall` — signals the provider that your application is ready; returns the same `LiveCall` instance for chaining.
+- `connect(TransportInterface $transport): LiveSession` — opens the bidirectional session.
+- `hangup(): void` — terminates the call from the server side.
+
+<Warning>
+`call()` is only available on models that implement `LiveCallModelInterface`. Calling it on an unsupported model throws `InvalidArgumentException`.
 </Warning>

@@ -115,8 +115,8 @@ class SummariserTest extends TestCase
 
 ## FakeImageModel
 
-<ParamField body="FakeImageModel::image(string $base64, string $mimeType)" type="static">
-  Creates a fake image model that returns an `ImageResponse` containing a single `ImageData` with the supplied base-64 string and MIME type. Defaults are `'aW1hZ2U='` and `'image/png'`.
+<ParamField body="FakeImageModel::image(string $base64 = 'aW1hZ2U=', string $mimeType = 'image/png')" type="static">
+  Creates a fake image model that returns an `ImageResponse` containing a single `ImageData` with the supplied base-64 string and MIME type.
 </ParamField>
 
 ```php
@@ -139,8 +139,8 @@ it('generates an image with the given prompt', function () {
 
 ## FakeSpeechModel
 
-<ParamField body="FakeSpeechModel::speech(string $data, string $mimeType)" type="static">
-  Returns a `SpeechResponse` containing an `AudioData` with the supplied raw audio bytes and MIME type. Defaults are `'audio-bytes'` and `'audio/mpeg'`.
+<ParamField body="FakeSpeechModel::speech(string $data = 'audio-bytes', string $mimeType = 'audio/mpeg')" type="static">
+  Returns a `SpeechResponse` containing an `AudioData` with the supplied raw audio bytes and MIME type.
 </ParamField>
 
 ```php
@@ -162,8 +162,8 @@ it('synthesises speech and records voice choice', function () {
 
 ## FakeTranscriptionModel
 
-<ParamField body="FakeTranscriptionModel::transcription(string $text)" type="static">
-  Returns a `TranscriptionResponse` containing a `TranscriptData` with the supplied text. Defaults to `'Hello from audio.'`.
+<ParamField body="FakeTranscriptionModel::transcription(string $text = 'Hello from audio.')" type="static">
+  Returns a `TranscriptionResponse` containing a `TranscriptData` with the supplied text.
 </ParamField>
 
 ```php
@@ -184,8 +184,8 @@ it('transcribes audio and returns controlled text', function () {
 
 ## FakeEmbeddingModel
 
-<ParamField body="FakeEmbeddingModel::embedding(array<int, float> $vector)" type="static">
-  Returns an `EmbeddingResponse` with a single `EmbeddingData` containing the supplied float vector. Defaults to `[0.1, 0.2, 0.3]`.
+<ParamField body="FakeEmbeddingModel::embedding(array $vector = [0.1, 0.2, 0.3])" type="static">
+  Returns an `EmbeddingResponse` with a single `EmbeddingData` containing the supplied `float[]` vector.
 </ParamField>
 
 ```php
@@ -208,8 +208,8 @@ it('returns the configured embedding vector', function () {
 
 `FakeVideoModel` simulates the asynchronous polling loop that video generation requires. You control how many `poll()` calls succeed before the job transitions to `Succeeded`.
 
-<ParamField body="new FakeVideoModel(string $id, int $pollsUntilComplete)" type="constructor">
-  Creates a video fake that returns a `VideoJob` with status `Running` for the first `$pollsUntilComplete - 1` polls, then returns `Succeeded` with a `VideoData` URL of `https://example.com/video.mp4`.
+<ParamField body="new FakeVideoModel(string $id = 'fake-video', int $pollsUntilComplete = 1)" type="constructor">
+  Creates a video fake that returns a `VideoJob` with status `Running` for the first `$pollsUntilComplete - 1` polls, then transitions to `Succeeded` with a `VideoData` URL of `https://example.com/video.mp4`. The `$id` argument sets the model's own identifier returned by `modelId()`; the job ID is always `'fake-job'`.
 </ParamField>
 
 ```php

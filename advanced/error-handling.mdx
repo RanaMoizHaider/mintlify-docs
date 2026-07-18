@@ -55,6 +55,14 @@ Every exception carries a `context` array populated at throw time. The following
   The provider's request or trace ID, useful when filing a support ticket.
 </ResponseField>
 
+<ResponseField name="errorType()" type="string|null">
+  The provider-supplied error type string, when present in the response body (e.g. `'invalid_request_error'` from OpenAI).
+</ResponseField>
+
+<ResponseField name="errorCode()" type="string|null">
+  The provider-supplied error code string, when present in the response body (e.g. `'model_not_found'` from OpenAI).
+</ResponseField>
+
 <ResponseField name="isRetryable()" type="bool">
   Returns `true` for status codes 408, 409, 429, 500, 502, 503, 504, and 529.
 </ResponseField>

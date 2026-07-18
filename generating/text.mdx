@@ -364,6 +364,10 @@ foreach ($result->toolResults as $res) {
   The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
 </ResponseField>
 
+<ResponseField name="providerMetadata" type="array">
+  Provider-specific metadata returned alongside the response. Keys and values are provider-defined and may include model version details, safety scores, or routing information.
+</ResponseField>
+
 ## Usage tracking
 
 ```php

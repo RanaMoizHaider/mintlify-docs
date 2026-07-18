@@ -98,6 +98,14 @@ echo "Dimensions: {$result->output->dimensions}\n";
   Token consumption for the request. Contains `inputTokens` (the total number of tokens across all inputs) and `outputTokens`.
 </ResponseField>
 
+<ResponseField name="rawResponse" type="array">
+  The unmodified response body returned by the provider, useful for debugging or accessing non-standard fields.
+</ResponseField>
+
+<ResponseField name="providerMetadata" type="array">
+  Provider-specific metadata returned alongside the response. Keys and values are provider-defined.
+</ResponseField>
+
 ## The EmbeddingData object
 
 Each element in `$result->embeddings` is an `EmbeddingData` instance:
